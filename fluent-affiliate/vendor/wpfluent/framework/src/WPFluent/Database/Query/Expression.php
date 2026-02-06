@@ -1,0 +1,38 @@
+<?php
+
+namespace FluentAffiliate\Framework\Database\Query;
+
+use FluentAffiliate\Framework\Database\BaseGrammar;
+
+class Expression implements ExpressionInterface
+{
+
+	/**
+	 * The value of the expression.
+	 *
+	 * @var mixed
+	 */
+	protected $value;
+
+	/**
+	 * Create a new raw query expression.
+	 *
+	 * @param  mixed  $value
+	 * @return void
+	 */
+	public function __construct($value)
+	{
+		$this->value = $value;
+	}
+
+	/**
+     * Get the value of the expression.
+     *
+     * @param  \FluentAffiliate\Framework\Database\BaseGrammar $grammar
+     * @return mixed
+     */
+	public function getValue(BaseGrammar $grammar)
+	{
+		return $this->value;
+	}
+}
