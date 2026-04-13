@@ -182,8 +182,7 @@ class PayoutController extends Controller
         $minPayout = Arr::get($validated, 'config.min_payout', 0);
         $dataConfig = $request->get('config', []);
 
-        // create an empty payout
-        $payout = Payout::create([
+        $payoutData = [
             'title'         => sanitize_text_field(Arr::get($dataConfig, 'title')),
             'description'   => sanitize_textarea_field(Arr::get($dataConfig, 'description')),
             'payout_method' => 'manual',
@@ -196,7 +195,22 @@ class PayoutController extends Controller
                 'affiliate_ids' => Arr::get($dataConfig, 'affiliate_ids', []),
             ],
             'created_by'    => get_current_user_id(),
-        ]);
+        ];
+
+        $payoutData = apply_filters('fluent_affiliate/payout/before_create', $payoutData, $dataConfig, $affiliates);
+
+        // create an empty payout
+        $payout = Payout::create($payoutData);
+
+        $preProcessCheck = apply_filters('fluent_affiliate/payout/before_processing', $payout, $affiliates, $dataConfig);
+
+        if (is_wp_error($preProcessCheck)) {
+            $payout->delete();
+
+            return $this->sendError([
+                'message' => $preProcessCheck->get_error_message(),
+            ]);
+        }
 
         foreach ($affiliates as $affiliate) {
             // Atomically claim unpaid referrals by setting a temporary lock status
@@ -260,6 +274,8 @@ class PayoutController extends Controller
             'total_amount' => $totalAmount,
             'status'       => 'processing',
         ]);
+
+        do_action('fluent_affiliate/payout/processed', $payout, $affiliates);
 
         return [
             'payout'  => $payout,
@@ -453,7 +469,6 @@ class PayoutController extends Controller
 
         return $data;
     }
-
 
     public function getExportableTransactions(Request $request, $payoutId)
     {

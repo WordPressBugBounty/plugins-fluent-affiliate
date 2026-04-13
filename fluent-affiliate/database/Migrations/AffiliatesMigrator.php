@@ -50,8 +50,9 @@ class AffiliatesMigrator
             ));
 
             if (empty($columnExists)) {
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange -- Required for adding column in migration
-                $wpdb->query("ALTER TABLE `wp_fa_affiliates` ADD `lead_counts` bigint NULL DEFAULT '0' AFTER `visits`;");
+                $safeTable = esc_sql($table);
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Required for adding column in migration; table name sanitized via esc_sql()
+                $wpdb->query("ALTER TABLE `{$safeTable}` ADD `lead_counts` bigint NULL DEFAULT '0' AFTER `visits`;");
             }
 
         }

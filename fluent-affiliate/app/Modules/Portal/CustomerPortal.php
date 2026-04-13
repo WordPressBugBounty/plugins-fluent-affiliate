@@ -149,13 +149,16 @@ class CustomerPortal
             ];
         }
 
-        wp_localize_script('fluent_affiliate_porral', 'fluentAffiliatePortal', [
+        $featuresSaved = Utility::getOption('fluent_affiliate_features', []);
+
+        $portalData = [
             'slug'             => $this->slug,
             'nonce'            => wp_create_nonce($this->slug),
             'rest'             => $this->getRestInfo(),
             'site_info'        => [
                 'site_url'  => home_url('/'),
                 'site_name' => get_bloginfo('name'),
+                'share_url' => apply_filters('fluent_affiliate/default_share_url', home_url('/'), $affiliate),
                 'aff_var'   => Utility::getReferralSetting('referral_variable', 'ref'),
                 'aff_value' => Utility::getAffiliateParam($affiliate)
             ],
@@ -165,8 +168,13 @@ class CustomerPortal
             'branded_coupons'  => $formattedCoupons,
             'currency'         => $this->getCurrency(),
             'is_modern'        => $isModern,
-            'menu_items'       => Helper::getPortalMenuItems($affiliate)
-        ]);
+            'menu_items'       => Helper::getPortalMenuItems($affiliate),
+            'qr_code_settings' => Arr::get($featuresSaved, 'affiliate_qr_code', [])
+        ];
+
+        $portalData = apply_filters('fluent_affiliate/portal_localize_data', $portalData);
+
+        wp_localize_script('fluent_affiliate_porral', 'fluentAffiliatePortal', $portalData);
     }
 
     /**

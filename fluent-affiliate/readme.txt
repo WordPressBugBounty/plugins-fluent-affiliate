@@ -4,7 +4,7 @@ Tags: affiliate program, affiliate management, affiliate marketing, wp affiliate
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.0
+Stable tag: 1.4.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -212,6 +212,29 @@ No, FluentAffiliate works perfectly on its own; you don't need any other Fluent 
 8. Affiliate Payout
 
 == Changelog ==
+
+= 1.4.0 - Apr 10, 2026 =
+- Introduced: SliceWP Migration
+- Introduced: Commission on WooCommerce Subscription Renewal
+- Added: Subscription Renewal Commission Rates Per Product/Category
+- Added: CSV Export for Affiliates, Referrals, and Visits
+- Added: Social Media Share for Affiliates in the Affiliate Portal
+- Added: QR Code Settings for Affiliate Portal
+- Added: Recommended Plugins and Add-ons Section
+- Improved: Creatives Now Included in Data Migration
+- Fixed: Visits Filter Not Working
+- Fixed: Payout Currency Symbol Display
+- Fixed: FluentBooking Product Selector Issue
+- Fixed: ProfilePress Integration Issue
+- Fixed: EDD Coupon Affiliate Lookup Issue
+- Fixed: PMPro Integration Ignoring Disabled Connector State
+- Fixed: Renewal Rate Not Accepting Decimal Values
+- Fixed: WooCommerce Renewal Commission Note
+- Fixed: Affiliate Commission on Conversion Script
+- Fixed: Individual Integration Settings Issue
+- Fixed: Network Activation Skipping Pro Migrations on Multisite Child Sites
+- Fixed: Infinite Loop in Username Generation
+- Security: Hardened Nonce Verification on AJAX Actions
 
 = 1.3.0 - Feb 03, 2026 =
 - Introduced: Affiliate Commission on Subscription

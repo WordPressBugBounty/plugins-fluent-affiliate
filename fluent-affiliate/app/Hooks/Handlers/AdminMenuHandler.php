@@ -281,6 +281,8 @@ class AdminMenuHandler
             'suggested_colors'    => Helper::getSuggestedColors(),
             'upgrade_url'         => Utility::getUpgradeUrl(),
             'is_rtl'              => Utility::isRtl(),
+            'payout_form_schema'  => Helper::getPayoutFormSchema(),
+            'qr_code_settings'    => Arr::get(Utility::getOption('fluent_affiliate_features', []), 'affiliate_qr_code', [])
         ]);
 
         wp_localize_script($this->slug . '_admin_app', 'fluentAffiliateAdmin', $adminScriptVars);
@@ -390,6 +392,15 @@ class AdminMenuHandler
                 'component_type' => 'StandAloneComponent',
                 'route'          => [
                     'name' => 'affiliate_creatives'
+                ]
+            ],
+            'features_addons'          => [
+                'title'          => __('Features & Addons', 'fluent-affiliate'),
+                'disable'        => false,
+                'svg_icon'       => '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M17.071 10L18.536 11.464C18.6247 11.5527 18.6745 11.6735 18.6745 11.7995C18.6745 11.9255 18.6247 12.0463 18.536 12.135L12.136 18.535C12.0473 18.6237 11.9265 18.6735 11.8005 18.6735C11.6745 18.6735 11.5537 18.6237 11.465 18.535L10 17.071L8.536 18.535C8.44727 18.6237 8.32651 18.6735 8.2005 18.6735C8.07449 18.6735 7.95373 18.6237 7.865 18.535L1.465 12.135C1.37632 12.0463 1.32654 11.9255 1.32654 11.7995C1.32654 11.6735 1.37632 11.5527 1.465 11.464L2.929 10L1.465 8.536C1.37632 8.44727 1.32654 8.32651 1.32654 8.2005C1.32654 8.07449 1.37632 7.95373 1.465 7.865L7.865 1.465C7.95373 1.37632 8.07449 1.32654 8.2005 1.32654C8.32651 1.32654 8.44727 1.37632 8.536 1.465L10 2.929L11.464 1.465C11.5527 1.37632 11.6735 1.32654 11.7995 1.32654C11.9255 1.32654 12.0463 1.37632 12.135 1.465L18.535 7.865C18.6237 7.95373 18.6735 8.07449 18.6735 8.2005C18.6735 8.32651 18.6237 8.44727 18.535 8.536L17.071 10ZM15.657 10L17.121 8.2L11.8 2.879L10 4.343L8.2 2.879L2.879 8.2L4.343 10L2.879 11.8L8.2 17.121L10 15.657L11.8 17.121L17.121 11.8L15.657 10Z" fill="currentColor"/></svg>',
+                'component_type' => 'StandAloneComponent',
+                'route'          => [
+                    'name' => 'features_addons'
                 ]
             ],
             'integration_settings'     => [

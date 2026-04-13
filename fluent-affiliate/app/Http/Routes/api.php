@@ -22,13 +22,13 @@ use FluentAffiliate\App\Http\Controllers\IntegrationController;
 $router->prefix('reports')->withPolicy('UserPolicy')->group(function ($router) {
     $router->get('advanced-providers', [ReportsController::class, 'getAdvancedReportProviders']);
     $router->get('commerce-reports/{provider}', [ReportsController::class, 'getReports'])->alphaNumDash('provider');
-    $router->get('commerce-reports/{provider}/report', [ReportsController::class, 'getReport'])->alphaNumDash('provider');
     $router->get('dashboard-stats', [DashboardController::class, 'getStats']);
     $router->get('dashboard-chart-stats', [DashboardController::class, 'getChartStats']);
 });
 
 $router->prefix('affiliates')->withPolicy('AffiliatePolicy')->group(function ($router) {
     $router->get('/', [AffiliateController::class, 'index']);
+    $router->get('/export', [AffiliateController::class, 'export']);
     $router->post('/', [AffiliateController::class, 'createAffiliate']);
 
     $router->get('/{id}', [AffiliateController::class, 'getAffiliate'])->int('id');
@@ -45,6 +45,7 @@ $router->prefix('affiliates')->withPolicy('AffiliatePolicy')->group(function ($r
 
 $router->prefix('referrals')->withPolicy('ReferralPolicy')->group(function ($router) {
     $router->get('/', [ReferralController::class, 'index']);
+    $router->get('/export', [ReferralController::class, 'export']);
     $router->post('/', [ReferralController::class, 'createReferral']);
     $router->get('/{id}', [ReferralController::class, 'show'])->int('id');
     $router->patch('/{id}', [ReferralController::class, 'update'])->int('id');
@@ -70,6 +71,7 @@ $router->prefix('payouts')->withPolicy('PayoutPolicy')->group(function ($router)
 
 $router->prefix('visits')->withPolicy('VisitPolicy')->group(function ($router) {
     $router->get('/', [VisitController::class, 'index']);
+    $router->get('/export', [VisitController::class, 'export']);
 });
 
 $router->prefix('settings')->withPolicy('AdminPolicy')->group(function ($router) {
@@ -79,6 +81,11 @@ $router->prefix('settings')->withPolicy('AdminPolicy')->group(function ($router)
     $router->get('/email-config/emails', [SettingController::class, 'getNotificationEmails']);
     $router->post('/email-config/emails', [SettingController::class, 'updateNotificationEmails']);
     $router->patch('/email-config/emails', [SettingController::class, 'patchSingleNotificationEmail']);
+
+    $router->get('/features', [SettingController::class, 'getFeatures']);
+    $router->get('/features/{feature_key}', [SettingController::class, 'getFeatureSettings'])->alphaNumDash('feature_key');
+    $router->post('/features/{feature_key}', [SettingController::class, 'updateFeatureSettings'])->alphaNumDash('feature_key');
+    $router->post('/addons/install', [SettingController::class, 'installAddon']);
 
     $router->get('/integrations', [IntegrationController::class, 'index']);
     $router->get('/integration/config', [IntegrationController::class, 'getConfig']);
@@ -98,12 +105,6 @@ $router->prefix('settings')->withPolicy('AdminPolicy')->group(function ($router)
     $router->get('/migrations/status', [MigrationController::class, 'getPollingStatus']);
     $router->post('/migrations/wipe', [MigrationController::class, 'wipeCurrentData']);
     $router->get('/migrations/statistics', [MigrationController::class, 'getMigrationStatistics']);
-
-    $router->post('/migrate/affiliates', [MigrationController::class, 'migrateAffiliates']);
-    $router->post('/migrate/referrals', [MigrationController::class, 'migrateReferrals']);
-    $router->post('/migrate/customers', [MigrationController::class, 'migrateCustomers']);
-    $router->post('/migrate/payouts', [MigrationController::class, 'migratePayouts']);
-    $router->post('/migrate/visits', [MigrationController::class, 'migrateVisits']);
 
     $router->get('/options/affiliates', [SettingController::class, 'getAffiliatesOptions']);
     $router->get('/options/users', [SettingController::class, 'getUsersOptions']);

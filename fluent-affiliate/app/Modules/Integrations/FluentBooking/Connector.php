@@ -4,6 +4,7 @@ namespace FluentAffiliate\App\Modules\Integrations\FluentBooking;
 
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Modules\Integrations\BaseConnectorSettings;
+use FluentAffiliate\Framework\Support\Arr;
 use FluentBooking\App\Models\CalendarSlot;
 
 class Connector extends BaseConnectorSettings
@@ -52,14 +53,38 @@ class Connector extends BaseConnectorSettings
 
     public function getProductCatOptions($options = [], $params = [])
     {
-        $events = CalendarSlot::with(['calendar'])->get();
+        $search = Arr::get($params, 'search', '');
+        $includeIds = Arr::get($params, 'include_ids', []);
+
+        $query = CalendarSlot::with(['calendar']);
+
+        if ($search) {
+            $query->where('title', 'LIKE', '%' . $search . '%');
+        }
+
+        $events = $query->limit(50)->get();
 
         $formattedEvents = [];
+        $pushedIds = [];
+
         foreach ($events as $event) {
+            $pushedIds[] = $event->id;
             $formattedEvents[] = [
                 'id'    => $event->id,
                 'label' => $event->title . ' (' . $event->calendar->title . ')',
             ];
+        }
+
+        $leftIds = array_diff($includeIds, $pushedIds);
+
+        if (!empty($leftIds)) {
+            $additional = CalendarSlot::with(['calendar'])->whereIn('id', $leftIds)->get();
+            foreach ($additional as $event) {
+                $formattedEvents[] = [
+                    'id'    => $event->id,
+                    'label' => $event->title . ' (' . $event->calendar->title . ')',
+                ];
+            }
         }
 
         return $formattedEvents;

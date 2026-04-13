@@ -126,6 +126,45 @@ class ReferralController extends Controller
         ];
     }
 
+    public function export(Request $request)
+    {
+        $refQuery = Referral::query()->with(['affiliate.user'])
+        ->searchBy($request->getSafe('search', 'sanitize_text_field'))
+        ->byStatus($request->getSafe('status', 'sanitize_text_field'))
+        ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'created_at'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'));
+
+        $limit = apply_filters('fluent_affiliate/data_export_limit', 5000);
+
+        $total   = $refQuery->count();
+        $limited = $total > $limit;
+
+        $referrals = $refQuery->take($limit)->get();
+
+        $referrals = $referrals->map(function ($referral) {
+            $user = $referral->affiliate ? $referral->affiliate->user : null;
+            return [
+                'id'              => (int) $referral->id,
+                'affiliate_name'  => Sanitizer::forCsv($user ? $user->full_name : ''),
+                'affiliate_email' => Sanitizer::forCsv($user ? $user->user_email : ''),
+                'amount'          => $referral->amount,
+                'order_total'     => $referral->order_total,
+                'currency'        => $referral->currency,
+                'description'     => Sanitizer::forCsv($referral->description ?? ''),
+                'provider'        => Sanitizer::forCsv($referral->provider ?? ''),
+                'provider_id'     => $referral->provider_id,
+                'type'            => $referral->type,
+                'status'          => $referral->status,
+                'created_at'      => (string) $referral->created_at,
+            ];
+        });
+
+        return [
+            'referrals' => $referrals,
+            'limited'   => $limited,
+            'total'     => $total,
+        ];
+    }
+
     public function destroy($id)
     {
         $referral = Referral::query()->findOrFail($id);

@@ -179,4 +179,19 @@ class Helper
 
         return apply_filters('fluent_affiliate/suggested_colors', $colors);
     }
+
+    public static function getPayoutFormSchema()
+    {
+        return apply_filters('fluent_affiliate/payout_form_schema', [
+            'title' => '',
+            'description' => '',
+            'payout_method' => 'manual',
+            'affiliate_ids' => [],
+            'start_date' => '',
+            'end_date' => '',
+            'min_payout' => '',
+            'payout_status' => 'processing',
+            'custom_fields' => []
+        ]);
+    }
 }

@@ -356,12 +356,10 @@ class Utility
 
         $settings = wp_parse_args($settings, $default);
 
-        $settings = wp_parse_args($settings, $default);
-
         return $settings;
     }
 
-    public static function setCache($key, $value, $expire = 600)
+    public static function setCache($key, $value, $expire = 3600)
     {
         $key = 'fa_' . $key;
 
@@ -392,6 +390,67 @@ class Utility
     {
         $key = 'fa_' . $key;
         return wp_cache_delete($key, 'fluent_affiliate');
+    }
+
+    public static function getRegisteredFeatures()
+    {
+        return apply_filters('fluent_affiliate/registered_features', [
+            [
+                'key'          => 'social_media_share',
+                'title'        => __('Social Media Share', 'fluent-affiliate'),
+                'description'  => __('Allow affiliates to share their referral links directly to social media platforms.', 'fluent-affiliate'),
+                'icon'         => '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15 13.3996C14.3667 13.3996 13.8 13.6496 13.3667 14.0413L7.425 10.5829C7.46667 10.3913 7.5 10.1996 7.5 9.99961C7.5 9.79961 7.46667 9.60794 7.425 9.41628L13.3 5.99128C13.75 6.40794 14.3417 6.66628 15 6.66628C16.3833 6.66628 17.5 5.54961 17.5 4.16628C17.5 2.78294 16.3833 1.66628 15 1.66628C13.6167 1.66628 12.5 2.78294 12.5 4.16628C12.5 4.36628 12.5333 4.55794 12.575 4.74961L6.7 8.17461C6.25 7.75794 5.65833 7.49961 5 7.49961C3.61667 7.49961 2.5 8.61628 2.5 9.99961C2.5 11.3829 3.61667 12.4996 5 12.4996C5.65833 12.4996 6.25 12.2413 6.7 11.8246L12.6333 15.2913C12.5917 15.4663 12.5667 15.6496 12.5667 15.8329C12.5667 17.1746 13.6583 18.2663 15 18.2663C16.3417 18.2663 17.4333 17.1746 17.4333 15.8329C17.4333 14.4913 16.3417 13.3996 15 13.3996Z" fill="currentColor"/></svg>',
+                'is_enabled'   => 'no',
+                'is_pro'       => true,
+                'has_settings' => true,
+                'settings'     => [],
+            ],
+            [
+                'key'          => 'affiliate_qr_code',
+                'title'        => __('Affiliate QR Code', 'fluent-affiliate'),
+                'description'  => __('Display a scannable QR code on the affiliate portal so affiliates can easily share their referral link. Customize the QR code colors to match your brand.', 'fluent-affiliate'),
+                'icon'         => '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="1.5" width="6" height="6" rx="0.5" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="3" width="3" height="3" fill="currentColor"/><rect x="12.5" y="1.5" width="6" height="6" rx="0.5" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="3" height="3" fill="currentColor"/><rect x="1.5" y="12.5" width="6" height="6" rx="0.5" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="3" height="3" fill="currentColor"/><rect x="12" y="12" width="2.5" height="2.5" fill="currentColor"/><rect x="15.5" y="12" width="2.5" height="2.5" fill="currentColor"/><rect x="12" y="15.5" width="2.5" height="2.5" fill="currentColor"/><rect x="15.5" y="15.5" width="2.5" height="2.5" fill="currentColor"/><rect x="12" y="12" width="2.5" height="2.5" fill="currentColor"/><rect x="18" y="12" width="0.5" height="2.5" fill="currentColor"/><rect x="12" y="18" width="2.5" height="0.5" fill="currentColor"/></svg>',
+                'is_enabled'   => 'yes',
+                'is_pro'       => false,
+                'has_settings' => true,
+                'settings'     => [],
+            ],
+        ]);
+    }
+
+    public static function isFeatureEnabled($key)
+    {
+        if (!defined('FLUENT_AFFILIATE_PRO_VERSION')) {
+            return false;
+        }
+
+        return Arr::get(self::getOption('fluent_affiliate_features', []), $key . '.is_enabled') === 'yes';
+    }
+
+    public static function getFeaturesConfig($refresh = false)
+    {
+        static $features = null;
+
+        if ($features !== null && !$refresh) {
+            return $features;
+        }
+
+        $registered = self::getRegisteredFeatures();
+
+        $saved = self::getOption('fluent_affiliate_features', []);
+
+        $isPro = defined('FLUENT_AFFILIATE_PRO_VERSION');
+
+        $features = [];
+        foreach ($registered as $feature) {
+            $key = $feature['key'];
+            $canEnable = $isPro || empty($feature['is_pro']);
+            $isDefaultEnabled = Arr::get($feature, 'is_enabled', 'yes');
+            $feature['is_enabled'] = ($canEnable && Arr::get($saved, $key . '.is_enabled', $isDefaultEnabled) === 'yes') ? 'yes' : 'no';
+            $features[] = $feature;
+        }
+   
+        return $features;
     }
 
     public static function getOption($key, $default = null)

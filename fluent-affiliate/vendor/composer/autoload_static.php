@@ -11,11 +11,11 @@ class ComposerStaticInitf63c2ed6b044dde5698ce6b3a50c2221
     );
 
     public static $prefixLengthsPsr4 = array (
-        'W' =>
+        'W' => 
         array (
             'WPFluent\\' => 9,
         ),
-        'F' =>
+        'F' => 
         array (
             'FluentAffiliate\\Framework\\' => 26,
             'FluentAffiliate\\App\\' => 20,
@@ -23,15 +23,15 @@ class ComposerStaticInitf63c2ed6b044dde5698ce6b3a50c2221
     );
 
     public static $prefixDirsPsr4 = array (
-        'WPFluent\\' =>
+        'WPFluent\\' => 
         array (
             0 => __DIR__ . '/..' . '/wpfluent/framework/src/WPFluent',
         ),
-        'FluentAffiliate\\Framework\\' =>
+        'FluentAffiliate\\Framework\\' => 
         array (
             0 => __DIR__ . '/..' . '/wpfluent/framework/src/WPFluent',
         ),
-        'FluentAffiliate\\App\\' =>
+        'FluentAffiliate\\App\\' => 
         array (
             0 => __DIR__ . '/../..' . '/app',
         ),
@@ -52,7 +52,6 @@ class ComposerStaticInitf63c2ed6b044dde5698ce6b3a50c2221
         'FluentAffiliate\\App\\Hooks\\Handlers\\DashboardWidgetHandler' => __DIR__ . '/../..' . '/app/Hooks/Handlers/DashboardWidgetHandler.php',
         'FluentAffiliate\\App\\Hooks\\Handlers\\DeactivationHandler' => __DIR__ . '/../..' . '/app/Hooks/Handlers/DeactivationHandler.php',
         'FluentAffiliate\\App\\Hooks\\Handlers\\EmailNotificationHandler' => __DIR__ . '/../..' . '/app/Hooks/Handlers/EmailNotificationHandler.php',
-        'FluentAffiliate\\App\\Hooks\\Handlers\\Scheduler' => __DIR__ . '/../..' . '/app/Hooks/Handlers/Scheduler.php',
         'FluentAffiliate\\App\\Http\\Controllers\\AffiliateController' => __DIR__ . '/../..' . '/app/Http/Controllers/AffiliateController.php',
         'FluentAffiliate\\App\\Http\\Controllers\\Controller' => __DIR__ . '/../..' . '/app/Http/Controllers/Controller.php',
         'FluentAffiliate\\App\\Http\\Controllers\\DashboardController' => __DIR__ . '/../..' . '/app/Http/Controllers/DashboardController.php',
@@ -106,6 +105,7 @@ class ComposerStaticInitf63c2ed6b044dde5698ce6b3a50c2221
         'FluentAffiliate\\App\\Modules\\Integrations\\Paymattic\\Connector' => __DIR__ . '/../..' . '/app/Modules/Integrations/Paymattic/Connector.php',
         'FluentAffiliate\\App\\Modules\\Portal\\CustomerPortal' => __DIR__ . '/../..' . '/app/Modules/Portal/CustomerPortal.php',
         'FluentAffiliate\\App\\Modules\\Tracker\\Track' => __DIR__ . '/../..' . '/app/Modules/Tracker/Track.php',
+        'FluentAffiliate\\App\\Services\\AddonService' => __DIR__ . '/../..' . '/app/Services/AddonService.php',
         'FluentAffiliate\\App\\Services\\AffiliateService' => __DIR__ . '/../..' . '/app/Services/AffiliateService.php',
         'FluentAffiliate\\App\\Services\\EmailNotificationSettings' => __DIR__ . '/../..' . '/app/Services/EmailNotificationSettings.php',
         'FluentAffiliate\\App\\Services\\Libs\\Emogrifier\\Emogrifier' => __DIR__ . '/../..' . '/app/Services/Libs/Emogrifier/Emogrifier.php',
@@ -116,6 +116,7 @@ class ComposerStaticInitf63c2ed6b044dde5698ce6b3a50c2221
         'FluentAffiliate\\App\\Services\\Migrator\\CLI\\AffiliateManagerMigrationCLI' => __DIR__ . '/../..' . '/app/Services/Migrator/CLI/AffiliateManagerMigrationCLI.php',
         'FluentAffiliate\\App\\Services\\Migrator\\Providers\\AffiliateManagerMigrator' => __DIR__ . '/../..' . '/app/Services/Migrator/Providers/AffiliateManagerMigrator.php',
         'FluentAffiliate\\App\\Services\\Migrator\\Providers\\AffiliateWP' => __DIR__ . '/../..' . '/app/Services/Migrator/Providers/AffiliateWP.php',
+        'FluentAffiliate\\App\\Services\\Migrator\\Providers\\SliceWP' => __DIR__ . '/../..' . '/app/Services/Migrator/Providers/SliceWP.php',
         'FluentAffiliate\\App\\Services\\Migrator\\Providers\\SolidAffiliate' => __DIR__ . '/../..' . '/app/Services/Migrator/Providers/SolidAffiliate.php',
         'FluentAffiliate\\App\\Services\\PermissionManager' => __DIR__ . '/../..' . '/app/Services/PermissionManager.php',
         'FluentAffiliate\\App\\Services\\Reports\\DataTransformer' => __DIR__ . '/../..' . '/app/Services/Reports/DataTransformer.php',
@@ -135,6 +136,7 @@ class ComposerStaticInitf63c2ed6b044dde5698ce6b3a50c2221
         'FluentAffiliate\\Database\\Migrations\\VisitsMigrator' => __DIR__ . '/../..' . '/database/Migrations/VisitsMigrator.php',
         'FluentAffiliate\\Database\\Seeder\\AffiliateSeeder' => __DIR__ . '/../..' . '/database/Seeder/AffiliateSeeder.php',
         'FluentAffiliate\\Database\\Seeder\\Seeder' => __DIR__ . '/../..' . '/database/Seeder/Seeder.php',
+        'FluentAffiliate\\Database\\Seeder\\SliceWPSeeder' => __DIR__ . '/../..' . '/database/Seeder/SliceWPSeeder.php',
         'FluentAffiliate\\Framework\\Cache\\Cache' => __DIR__ . '/..' . '/wpfluent/framework/src/WPFluent/Cache/Cache.php',
         'FluentAffiliate\\Framework\\Container\\BoundMethod' => __DIR__ . '/..' . '/wpfluent/framework/src/WPFluent/Container/BoundMethod.php',
         'FluentAffiliate\\Framework\\Container\\Container' => __DIR__ . '/..' . '/wpfluent/framework/src/WPFluent/Container/Container.php',

@@ -36,12 +36,14 @@ class Connector extends BaseConnectorSettings
     public function config()
     {
         $defaults = [
-            'is_enabled'                    => 'no',
-            'affiliate_on_discount_product' => 'no',
-            'disable_on_upgrades'           => 'yes',
-            'custom_affiliate_rate'         => 'no',
-            'custom_affiliate_rates'        => [],
-            'enable_subscription_renewal'   => 'no',
+            'is_enabled'                     => 'no',
+            'affiliate_on_discount_product'  => 'no',
+            'disable_on_upgrades'            => 'yes',
+            'custom_affiliate_rate'          => 'no',
+            'custom_affiliate_rates'         => [],
+            'enable_subscription_renewal'    => 'no',
+            'renewal_custom_affiliate_rate'  => 'no',
+            'renewal_custom_affiliate_rates' => [],
         ];
 
         if (!$this->willConnectorRun()) {
@@ -104,7 +106,17 @@ class Connector extends BaseConnectorSettings
                 'hidden'         => $this->isRenewalEnabled() ? 'no' : 'yes',
                 'true_label'     => 'yes',
                 'false_label'    => 'no',
-            ]
+            ],
+            'renewal_rate_component'       => [
+                'type'           => 'custom_rate_component',
+                'has_categories' => true,
+                'has_products'   => true,
+                'main_label'     => __('Enable custom rate for specific products or categories on renewals', 'fluent-affiliate'),
+                'rate_key'       => 'renewal_custom_affiliate_rate',
+                'rates_key'      => 'renewal_custom_affiliate_rates',
+                'hidden'         => $this->isRenewalEnabled() ? 'no' : 'yes',
+                'shown_when'     => ['enable_subscription_renewal', 'yes'],
+            ],
         ];
     }
 

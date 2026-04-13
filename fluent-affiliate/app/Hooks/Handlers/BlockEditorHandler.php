@@ -43,8 +43,9 @@ class BlockEditorHandler
                 'currency'   => (new AdminMenuHandler())->getCurrency(),
                 'menu_items' => array_values(Helper::getPortalMenuItems($affiliate)),
                 'site_info'  => [
-                    'site_url' => home_url(),
-                    'aff_var'  => Utility::getQueryVarName(),
+                    'site_url'  => home_url('/'),
+                    'share_url' => apply_filters('fluent_affiliate/default_share_url', home_url('/'), $affiliate),
+                    'aff_var'   => Utility::getQueryVarName(),
                     'aff_value' => Utility::getAffiliateParam($affiliate),
                 ]
             ]);

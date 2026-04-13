@@ -18,6 +18,8 @@ use FluentAffiliatePro\App\Services\Integrations\WooCommerce\Bootstrap;
 
 class Commands
 {
+    private $sliceWPGroupIdMap = null;
+
     public function migrate_from_affiliatewp()
     {
 
@@ -206,7 +208,7 @@ class Commands
             }
 
             $formattedProducts = [];
-            $products = maybe_unserialize($referral->products);
+            $products = Utility::safeUnserialize($referral->products);
 
             if ($products && is_array($products)) {
                 foreach ($products as $product) {
@@ -717,43 +719,43 @@ class Commands
         // Migrate affiliate groups
         if (AffiliateGroup::count()) {
             fluentAffiliate_update_option('solid_migrated_affiliate_groups', 0);
-            AffiliateGroup::query()->truncate();
+            AffiliateGroup::truncate();
         }
         $this->migrateSolidAffiliateGroups();
 
         // Migrate affiliates
         if (Affiliate::count()) {
             fluentAffiliate_update_option('solid_migrated_affiliates', 0);
-            Affiliate::query()->truncate();
+            Affiliate::truncate();
         }
         $this->migrateSolidAffiliateAffiliates();
 
         // Migrate referrals
         if (Referral::count()) {
             fluentAffiliate_update_option('solid_migrated_referrals', 0);
-            Referral::query()->truncate();
+            Referral::truncate();
         }
         $this->migrateSolidAffiliateReferrals();
 
         // Migrate customers
         if (Customer::count()) {
             fluentAffiliate_update_option('solid_migrated_customers', 0);
-            Customer::query()->truncate();
+            Customer::truncate();
         }
         $this->migrateSolidAffiliateCustomers();
 
         // Migrate payouts
         if (Payout::count()) {
             fluentAffiliate_update_option('solid_migrated_payout_id', 0);
-            Payout::query()->truncate();
-            Transaction::query()->truncate();
+            Payout::truncate();
+            Transaction::truncate();
         }
         $this->migrateSolidAffiliatePayouts();
 
         // Migrate visits
         if (\FluentAffiliate\App\Models\Visit::count()) {
             fluentAffiliate_update_option('solid_migrated_visits', 0);
-            Visit::query()->truncate();
+            Visit::truncate();
         }
         $this->migrateSolidAffiliateVisits();
         $this->recount_earnings();
@@ -1281,5 +1283,693 @@ class Commands
         // Use the new temporary CLI migration class
         $migrator = new \FluentAffiliate\App\Services\Migrator\CLI\AffiliateManagerMigrationCLI();
         $migrator->migrate();
+    }
+
+    public function migrate_from_slicewp()
+    {
+        $db = FluentAffiliate('db');
+
+        $stats = [
+            [
+                'title' => 'Total Affiliate Groups',
+                'count' => $db->table('slicewp_collections')
+                    ->where('object_context', 'affiliate')
+                    ->where('type', 'group')
+                    ->count()
+            ],
+            [
+                'title' => 'Total Affiliates',
+                'count' => $db->table('slicewp_affiliates')->count()
+            ],
+            [
+                'title' => 'Total Referrals',
+                'count' => $db->table('slicewp_commissions')->count()
+            ],
+            [
+                'title' => 'Total Customers',
+                'count' => $db->table('slicewp_customers')->count()
+            ],
+            [
+                'title' => 'Total Payouts',
+                'count' => $db->table('slicewp_payouts')->count()
+            ],
+            [
+                'title' => 'Total Visits',
+                'count' => $db->table('slicewp_visits')->count()
+            ]
+        ];
+
+        \WP_CLI\Utils\format_items('table', $stats, ['title', 'count']);
+
+        \WP_CLI::confirm('Are you sure you want to migrate from SliceWP?');
+
+        \WP_CLI::log('Starting SliceWP migration...');
+
+        // Migrate affiliate groups
+        if (AffiliateGroup::count()) {
+            fluentAffiliate_update_option('slicewp_migrated_affiliate_groups', 0);
+            AffiliateGroup::truncate();
+        }
+        $this->migrateSliceWPAffiliateGroups();
+
+        // Migrate affiliates
+        if (Affiliate::count()) {
+            fluentAffiliate_update_option('slicewp_migrated_affiliates', 0);
+            FluentAffiliate('db')->table('fa_affiliates')->truncate();
+        }
+        $this->migrateSliceWPAffiliates();
+
+        // Migrate referrals
+        if (Referral::count()) {
+            fluentAffiliate_update_option('slicewp_migrated_referrals', 0);
+            FluentAffiliate('db')->table('fa_referrals')->truncate();
+        }
+        $this->migrateSliceWPReferrals();
+
+        // Migrate customers
+        if (Customer::count()) {
+            fluentAffiliate_update_option('slicewp_migrated_customers', 0);
+            FluentAffiliate('db')->table('fa_customers')->truncate();
+        }
+        $this->migrateSliceWPCustomers();
+
+        // Migrate payouts
+        if (Payout::count()) {
+            fluentAffiliate_update_option('slicewp_migrated_payout_id', 0);
+            Payout::truncate();
+            Transaction::truncate();
+        }
+        $this->migrateSliceWPPayouts();
+
+        // Migrate visits
+        if (Visit::count()) {
+            fluentAffiliate_update_option('slicewp_migrated_visits', 0);
+            FluentAffiliate('db')->table('fa_visits')->truncate();
+        }
+        $this->migrateSliceWPVisits();
+
+        // Migrate creatives (Pro feature — skipped if table does not exist)
+        $this->migrateSliceWPCreatives();
+
+        fluentAffiliate_update_option('slicewp_migrated_recount', 0);
+        $this->recountSliceWPEarnings();
+    }
+
+    private function migrateSliceWPAffiliateGroups()
+    {
+        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_affiliate_groups', 0);
+
+        $db = FluentAffiliate('db');
+
+        $groups = $db->table('slicewp_collections')
+            ->where('object_context', 'affiliate')
+            ->where('type', 'group')
+            ->orderBy('id', 'ASC')
+            ->offset($migratedCount)
+            ->limit(100)
+            ->get();
+
+        if ($groups->isEmpty()) {
+            \WP_CLI::log(sprintf('Total %d affiliate groups migration done', $migratedCount));
+            return;
+        }
+
+        $rateTypeMap = ['percentage' => 'percentage', 'flat' => 'flat'];
+
+        $groupIds = $groups->pluck('id')->toArray();
+
+        $allMeta = $db->table('slicewp_collection_meta')
+            ->whereIn('slicewp_collection_id', $groupIds)
+            ->whereIn('meta_key', ['commission_rate_sale', 'commission_rate_type_sale'])
+            ->get();
+
+        $metaMap = [];
+        foreach ($allMeta as $meta) {
+            $metaMap[$meta->slicewp_collection_id][$meta->meta_key] = $meta->meta_value;
+        }
+
+        $existingNames = AffiliateGroup::where('object_type', 'affiliate_group')
+            ->whereIn('meta_key', $groups->pluck('name')->toArray())
+            ->pluck('meta_key')
+            ->toArray();
+
+        $dataToInsert = [];
+
+        foreach ($groups as $group) {
+            $migratedCount++;
+
+            if (in_array($group->name, $existingNames)) {
+                continue;
+            }
+
+            $rate     = $metaMap[$group->id]['commission_rate_sale'] ?? null;
+            $rateType = $metaMap[$group->id]['commission_rate_type_sale'] ?? null;
+
+            $dataToInsert[] = [
+                'meta_key'    => $group->name, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- Array key, not a DB query argument
+                'value'       => maybe_serialize([
+                    'status'    => 'active',
+                    'notes'     => 'Migrated from SliceWP',
+                    'rate_type' => isset($rateTypeMap[$rateType]) ? $rateTypeMap[$rateType] : 'percentage',
+                    'rate'      => $rate ?: 0,
+                ]),
+                'object_type' => 'affiliate_group',
+            ];
+        }
+
+        if (!empty($dataToInsert)) {
+            try {
+                AffiliateGroup::insert($dataToInsert);
+            } catch (\Exception $e) {
+                \WP_CLI::warning('Error migrating affiliate groups: ' . $e->getMessage());
+            }
+        }
+
+        fluentAffiliate_update_option('slicewp_migrated_affiliate_groups', $migratedCount);
+        \WP_CLI::log(sprintf('Migrated %d affiliate groups.....', $migratedCount));
+
+        $this->migrateSliceWPAffiliateGroups();
+    }
+
+    private function migrateSliceWPAffiliates()
+    {
+        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_affiliates', 0);
+
+        $db = FluentAffiliate('db');
+
+        $affiliateStatusMap = [
+            'active'   => 'active',
+            'pending'  => 'pending',
+            'inactive' => 'inactive',
+            'rejected' => 'inactive',
+        ];
+
+        $rateTypeMap = ['percentage' => 'percentage', 'flat' => 'flat'];
+
+        $affiliates = $db->table('slicewp_affiliates')
+            ->orderBy('id', 'ASC')
+            ->offset($migratedCount)
+            ->limit(100)
+            ->get();
+
+        if ($affiliates->isEmpty()) {
+            \WP_CLI::log(sprintf('Total %d affiliates migration done', $migratedCount));
+            return;
+        }
+
+        $affiliateIds = $affiliates->pluck('id')->toArray();
+
+        $groupLinks = $db->table('slicewp_collection_object_relationships')
+            ->whereIn('object_id', $affiliateIds)
+            ->where('object_context', 'affiliate')
+            ->get();
+
+        $affiliateGroupMap = [];
+        foreach ($groupLinks as $link) {
+            $affiliateGroupMap[$link->object_id] = $link->collection_id;
+        }
+
+        $faGroupIdMap = $this->getSliceWPGroupIdMap();
+
+        $customRates = $db->table('slicewp_affiliate_meta')
+            ->whereIn('slicewp_affiliate_id', $affiliateIds)
+            ->whereIn('meta_key', ['commission_rate_sale', 'commission_rate_type_sale'])
+            ->get();
+
+        $rateMap = [];
+        foreach ($customRates as $meta) {
+            $affId = $meta->slicewp_affiliate_id;
+            if ($meta->meta_key === 'commission_rate_sale') {
+                $rateMap[$affId]['rate'] = $meta->meta_value;
+            }
+            if ($meta->meta_key === 'commission_rate_type_sale') {
+                $rateMap[$affId]['rate_type'] = $meta->meta_value;
+            }
+        }
+
+        $dataToInsert = [];
+
+        foreach ($affiliates as $affiliate) {
+            $affId = $affiliate->id;
+            $migratedCount++;
+
+            $rate      = null;
+            $faRateType = 'default';
+            $faGroupId  = null;
+
+            if (isset($rateMap[$affId]['rate'])) {
+                $sliceRateType = $rateMap[$affId]['rate_type'] ?? 'percentage';
+                $faRateType    = isset($rateTypeMap[$sliceRateType]) ? $rateTypeMap[$sliceRateType] : 'percentage';
+                $rate          = $rateMap[$affId]['rate'];
+            } elseif (isset($affiliateGroupMap[$affId])) {
+                $sliceCollectionId = $affiliateGroupMap[$affId];
+                if (isset($faGroupIdMap[$sliceCollectionId])) {
+                    $faGroupId  = $faGroupIdMap[$sliceCollectionId];
+                    $faRateType = 'group';
+                }
+            }
+
+            $dataToInsert[] = [
+                'id'              => $affId,
+                'user_id'         => $affiliate->user_id,
+                'group_id'        => $faGroupId,
+                'rate'            => $rate,
+                'rate_type'       => $faRateType,
+                'payment_email'   => $affiliate->payment_email ?: null,
+                'status'          => isset($affiliateStatusMap[$affiliate->status]) ? $affiliateStatusMap[$affiliate->status] : 'active',
+                'note'            => $affiliate->website ? 'Website: ' . $affiliate->website : null,
+                'total_earnings'  => 0,
+                'unpaid_earnings' => 0,
+                'referrals'       => 0,
+                'visits'          => 0,
+                'created_at'      => $affiliate->date_created,
+                'updated_at'      => $affiliate->date_modified,
+            ];
+        }
+
+        if (!empty($dataToInsert)) {
+            try {
+                $db->table('fa_affiliates')->insert($dataToInsert);
+            } catch (\Exception $e) {
+                \WP_CLI::warning('Error migrating affiliates: ' . $e->getMessage());
+            }
+        }
+
+        fluentAffiliate_update_option('slicewp_migrated_affiliates', $migratedCount);
+        \WP_CLI::log(sprintf('Migrated %d affiliates.....', $migratedCount));
+
+        $this->migrateSliceWPAffiliates();
+    }
+
+    private function migrateSliceWPReferrals()
+    {
+        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_referrals', 0);
+
+        $db = FluentAffiliate('db');
+
+        $commissionStatusMap = [
+            'paid'     => 'paid',
+            'unpaid'   => 'unpaid',
+            'pending'  => 'pending',
+            'rejected' => 'rejected',
+        ];
+
+        $commissions = $db->table('slicewp_commissions')
+            ->orderBy('id', 'ASC')
+            ->offset($migratedCount)
+            ->limit(100)
+            ->get();
+
+        if ($commissions->isEmpty()) {
+            \WP_CLI::log(sprintf('Total %d referrals migration done', $migratedCount));
+            return;
+        }
+
+        $dataToInsert = [];
+
+        foreach ($commissions as $commission) {
+            $migratedCount++;
+
+            $dataToInsert[] = [
+                'id'              => $commission->id,
+                'affiliate_id'    => $commission->affiliate_id ?: null,
+                'visit_id'        => $commission->visit_id ?: null,
+                'customer_id'     => $commission->customer_id ?: null,
+                'parent_id'       => $commission->parent_id ?: null,
+                'description'     => null,
+                'status'          => isset($commissionStatusMap[$commission->status]) ? $commissionStatusMap[$commission->status] : 'pending',
+                'amount'          => $commission->amount,
+                'order_total'     => $commission->reference_amount,
+                'currency'        => $commission->currency ?: null,
+                'type'            => ($commission->type === 'subscription') ? 'recurring_sale' : 'sale',
+                'provider'        => $commission->origin ?: null,
+                'provider_id'     => is_numeric($commission->reference) ? (int)$commission->reference : null,
+                'provider_sub_id' => !is_numeric($commission->reference) ? $commission->reference : null,
+                'created_at'      => $commission->date_created,
+                'updated_at'      => $commission->date_modified,
+            ];
+        }
+
+        try {
+            $db->table('fa_referrals')->insert($dataToInsert);
+        } catch (\Exception $e) {
+            \WP_CLI::warning('Error migrating referrals: ' . $e->getMessage());
+        }
+
+        fluentAffiliate_update_option('slicewp_migrated_referrals', $migratedCount);
+        \WP_CLI::log(sprintf('Migrated %d referrals.....', $migratedCount));
+
+        $this->migrateSliceWPReferrals();
+    }
+
+    private function migrateSliceWPCustomers()
+    {
+        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_customers', 0);
+
+        $db = FluentAffiliate('db');
+
+        $customers = $db->table('slicewp_customers')
+            ->orderBy('id', 'ASC')
+            ->offset($migratedCount)
+            ->limit(100)
+            ->get();
+
+        if ($customers->isEmpty()) {
+            \WP_CLI::log(sprintf('Total %d customers migration done', $migratedCount));
+            return;
+        }
+
+        $dataToInsert = [];
+
+        foreach ($customers as $customer) {
+            $migratedCount++;
+
+            $dataToInsert[] = [
+                'id'              => $customer->id,
+                'user_id'         => $customer->user_id ?: null,
+                'by_affiliate_id' => $customer->affiliate_id ?: null,
+                'email'           => $customer->email ?: null,
+                'first_name'      => $customer->first_name ?: null,
+                'last_name'       => $customer->last_name ?: null,
+                'created_at'      => $customer->date_created,
+                'updated_at'      => $customer->date_modified,
+            ];
+        }
+
+        try {
+            Customer::insert($dataToInsert);
+        } catch (\Exception $e) {
+            \WP_CLI::warning('Error migrating customers: ' . $e->getMessage());
+        }
+
+        fluentAffiliate_update_option('slicewp_migrated_customers', $migratedCount);
+        \WP_CLI::log(sprintf('Migrated %d customers.....', $migratedCount));
+
+        $this->migrateSliceWPCustomers();
+    }
+
+    private function migrateSliceWPPayouts()
+    {
+        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_payout_id', 0);
+
+        $db = FluentAffiliate('db');
+
+        $payoutMethodMap  = ['manual' => 'manual', 'paypal' => 'paypal'];
+        $paymentStatusMap = [
+            'paid'       => 'paid',
+            'unpaid'     => 'processing',
+            'processing' => 'processing',
+            'failed'     => 'processing',
+        ];
+
+        $payouts = $db->table('slicewp_payouts')
+            ->orderBy('id', 'ASC')
+            ->offset($migratedCount)
+            ->limit(50)
+            ->get();
+
+        if ($payouts->isEmpty()) {
+            \WP_CLI::log(sprintf('Total %d payouts migration done', $migratedCount));
+            return;
+        }
+
+        $payoutIds = $payouts->pluck('id')->toArray();
+
+        $allPayments = $db->table('slicewp_payments')
+            ->whereIn('payout_id', $payoutIds)
+            ->get();
+
+        $paymentsByPayout = [];
+        foreach ($allPayments as $payment) {
+            $paymentsByPayout[$payment->payout_id][] = $payment;
+        }
+
+        foreach ($payouts as $payout) {
+            $migratedCount++;
+
+            $payments = $paymentsByPayout[$payout->id] ?? [];
+
+            if (empty($payments)) {
+                continue;
+            }
+
+            $firstPayment = $payments[0];
+
+            $formattedPayout = [
+                'created_by'    => $payout->originator_user_id ?: null,
+                'total_amount'  => $payout->amount,
+                'payout_method' => isset($payoutMethodMap[$firstPayment->payout_method]) ? $payoutMethodMap[$firstPayment->payout_method] : 'manual',
+                'status'        => 'paid',
+                'currency'      => $firstPayment->currency ?: null,
+                'title'         => 'Payout batch at ' . $payout->date_created,
+                'description'   => 'Migrated from SliceWP',
+                'created_at'    => $payout->date_created,
+                'updated_at'    => $payout->date_modified,
+            ];
+
+            try {
+                $payoutId = $db->table('fa_payouts')->insertGetId($formattedPayout);
+
+                foreach ($payments as $payment) {
+                    $transactionId = $db->table('fa_payout_transactions')->insertGetId([
+                        'affiliate_id'  => $payment->affiliate_id,
+                        'payout_id'     => $payoutId,
+                        'total_amount'  => $payment->amount,
+                        'payout_method' => isset($payoutMethodMap[$payment->payout_method]) ? $payoutMethodMap[$payment->payout_method] : 'manual',
+                        'created_by'    => $payment->originator_user_id ?: null,
+                        'status'        => isset($paymentStatusMap[$payment->status]) ? $paymentStatusMap[$payment->status] : 'paid',
+                        'currency'      => $payment->currency ?: null,
+                        'created_at'    => $payment->date_created,
+                        'updated_at'    => $payment->date_modified,
+                    ]);
+
+                    $commissionIds = $this->parseSliceWPCommissionIds($payment->commission_ids);
+
+                    if (!empty($commissionIds)) {
+                        $db->table('fa_referrals')
+                            ->whereIn('id', $commissionIds)
+                            ->update([
+                                'payout_id'             => $payoutId,
+                                'payout_transaction_id' => $transactionId,
+                            ]);
+                    }
+                }
+            } catch (\Exception $e) {
+                \WP_CLI::warning('Error migrating payout #' . $payout->id . ': ' . $e->getMessage());
+            }
+        }
+
+        fluentAffiliate_update_option('slicewp_migrated_payout_id', $migratedCount);
+        \WP_CLI::log(sprintf('Migrated %d payouts.....', $migratedCount));
+
+        $this->migrateSliceWPPayouts();
+    }
+
+    private function migrateSliceWPVisits()
+    {
+        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_visits', 0);
+
+        $db = FluentAffiliate('db');
+
+        $visits = $db->table('slicewp_visits')
+            ->orderBy('id', 'ASC')
+            ->offset($migratedCount)
+            ->limit(1000)
+            ->get();
+
+        if ($visits->isEmpty()) {
+            \WP_CLI::log(sprintf('Total %d visits migration done', $migratedCount));
+            return;
+        }
+
+        $dataToInsert = [];
+
+        foreach ($visits as $visit) {
+            $migratedCount++;
+
+            $dataToInsert[] = [
+                'id'           => $visit->id,
+                'affiliate_id' => $visit->affiliate_id ?: null,
+                'referral_id'  => $visit->commission_id ?: null,
+                'url'          => $visit->landing_url ?: null,
+                'referrer'     => $visit->referrer_url ?: null,
+                'ip'           => $visit->ip_address ?: null,
+                'utm_campaign' => null,
+                'created_at'   => $visit->date_created,
+                'updated_at'   => $visit->date_modified,
+            ];
+        }
+
+        try {
+            $db->table('fa_visits')->insert($dataToInsert);
+        } catch (\Exception $e) {
+            \WP_CLI::warning('Error migrating visits: ' . $e->getMessage());
+        }
+
+        fluentAffiliate_update_option('slicewp_migrated_visits', $migratedCount);
+        \WP_CLI::log(sprintf('Migrated %d visits.....', $migratedCount));
+
+        $this->migrateSliceWPVisits();
+    }
+
+    private function migrateSliceWPCreatives()
+    {
+        $wpdb      = $GLOBALS['wpdb'];
+        $tableName = $wpdb->prefix . 'fa_creatives';
+
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WP-CLI context; result not worth caching
+        if (!$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($tableName)))) {
+            \WP_CLI::log('Skipping creatives: fa_creatives table not found (Pro feature).');
+            return;
+        }
+
+        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_creatives', 0);
+
+        $db = FluentAffiliate('db');
+
+        $validTypes = ['image', 'qr_code', 'text'];
+
+        $creatives = $db->table('slicewp_creatives')
+            ->orderBy('id', 'ASC')
+            ->offset($migratedCount)
+            ->limit(100)
+            ->get();
+
+        if ($creatives->isEmpty()) {
+            \WP_CLI::log(sprintf('Total %d creatives migration done', $migratedCount));
+            return;
+        }
+
+        $existingNames = array_flip(
+            $db->table('fa_creatives')
+                ->whereIn('name', $creatives->pluck('name')->toArray())
+                ->pluck('name')
+                ->toArray()
+        );
+
+        $dataToInsert = [];
+
+        foreach ($creatives as $creative) {
+            $migratedCount++;
+
+            if (isset($existingNames[$creative->name])) {
+                continue;
+            }
+
+            $dataToInsert[] = [
+                'name'        => $creative->name,
+                'description' => $creative->description ?: null,
+                'type'        => in_array($creative->type, $validTypes) ? $creative->type : 'text',
+                'image'       => $creative->image_url ?: null,
+                'text'        => $creative->text ?: null,
+                'url'         => $creative->landing_url ?: null,
+                'privacy'     => 'public',
+                'status'      => $creative->status ?: 'active',
+                'meta'        => $creative->alt_text ? maybe_serialize(['alt_text' => $creative->alt_text]) : null,
+                'created_at'  => $creative->date_created,
+                'updated_at'  => $creative->date_modified,
+            ];
+        }
+
+        if (!empty($dataToInsert)) {
+            try {
+                $db->table('fa_creatives')->insert($dataToInsert);
+            } catch (\Exception $e) {
+                \WP_CLI::warning('Error migrating creatives: ' . $e->getMessage());
+            }
+        }
+
+        fluentAffiliate_update_option('slicewp_migrated_creatives', $migratedCount);
+        \WP_CLI::log(sprintf('Migrated %d creatives.....', $migratedCount));
+
+        $this->migrateSliceWPCreatives();
+    }
+
+    private function recountSliceWPEarnings()
+    {
+        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_recount', 0);
+
+        $affiliates = Affiliate::orderBy('id', 'ASC')
+            ->offset($migratedCount)
+            ->limit(100)
+            ->get();
+
+        if ($affiliates->isEmpty()) {
+            \WP_CLI::log(sprintf('Total %d affiliates recount done', $migratedCount));
+            return;
+        }
+
+        foreach ($affiliates as $affiliate) {
+            $affiliate->recountEarnings();
+            $migratedCount++;
+            fluentAffiliate_update_option('slicewp_migrated_recount', $migratedCount);
+        }
+
+        \WP_CLI::log(sprintf('Recounted %d affiliates.....', $migratedCount));
+
+        $this->recountSliceWPEarnings();
+    }
+
+    private function getSliceWPGroupIdMap()
+    {
+        if ($this->sliceWPGroupIdMap !== null) {
+            return $this->sliceWPGroupIdMap;
+        }
+
+        $this->sliceWPGroupIdMap = [];
+
+        $sliceGroups = FluentAffiliate('db')
+            ->table('slicewp_collections')
+            ->select(['id', 'name'])
+            ->where('object_context', 'affiliate')
+            ->where('type', 'group')
+            ->get();
+
+        if ($sliceGroups->isEmpty()) {
+            return $this->sliceWPGroupIdMap;
+        }
+
+        // Key FA groups by name for O(1) lookup instead of O(F) inner scan
+        $faGroupsByName = [];
+        foreach (AffiliateGroup::where('object_type', 'affiliate_group')->get() as $fg) {
+            $faGroupsByName[$fg->meta_key] = $fg->id;
+        }
+
+        foreach ($sliceGroups as $sg) {
+            if (isset($faGroupsByName[$sg->name])) {
+                $this->sliceWPGroupIdMap[$sg->id] = $faGroupsByName[$sg->name];
+            }
+        }
+
+        return $this->sliceWPGroupIdMap;
+    }
+
+    private function parseSliceWPCommissionIds($raw)
+    {
+        if (empty($raw)) {
+            return [];
+        }
+
+        $ids = Utility::safeUnserialize($raw);
+
+        if (is_array($ids)) {
+            return array_filter(array_map('absint', $ids));
+        }
+
+        $ids = json_decode($raw, true);
+
+        if (is_array($ids)) {
+            return array_filter(array_map('absint', $ids));
+        }
+
+        if (is_string($raw) && strpos($raw, ',') !== false) {
+            return array_filter(array_map('absint', explode(',', $raw)));
+        }
+
+        if (is_numeric($raw)) {
+            return [absint($raw)];
+        }
+
+        return [];
     }
 }

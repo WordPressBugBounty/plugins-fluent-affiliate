@@ -15,6 +15,7 @@ use FluentAffiliate\App\Models\Visit;
 use FluentAffiliate\App\Services\Migrator\Providers\AffiliateWP;
 use FluentAffiliate\App\Services\Migrator\Providers\AffiliateManagerMigrator;
 use FluentAffiliate\App\Services\Migrator\Providers\SolidAffiliate;
+use FluentAffiliate\App\Services\Migrator\Providers\SliceWP;
 use FluentAffiliate\Framework\Http\Request\Request;
 use FluentAffiliate\Framework\Support\Arr;
 
@@ -36,15 +37,22 @@ class MigrationController extends Controller
         // Add Affiliate Manager if plugin is present
         if (defined('WPAM_PLUGIN_FILE')) {
             $migrators[] = [
-                'name' => 'Affiliate Manager (Beta)',
+                'name' => 'Affiliate Manager',
                 'slug' => 'affiliate_manager',
             ];
         }
 
         if (defined('SOLID_AFFILIATE_DIR')) {
             $migrators[] = [
-                'name' => 'Solid Affiliate (Beta)',
+                'name' => 'Solid Affiliate',
                 'slug' => 'solid_affiliate',
+            ];
+        }
+
+        if (defined('SLICEWP_VERSION')) {
+            $migrators[] = [
+                'name' => 'SliceWP',
+                'slug' => 'slicewp',
             ];
         }
 
@@ -66,7 +74,7 @@ class MigrationController extends Controller
 
         $counts = $migrator->getCounts();
 
-        $migrationLogs = [
+        $migrationLogs = apply_filters('fluent_affiliate/get_migration_statistics', [
             'affiliate_groups' => [
                 'total'    => $counts['affiliate_groups'] ?? 0,
                 'migrated' => AffiliateGroup::count()
@@ -90,8 +98,8 @@ class MigrationController extends Controller
             'visits'     => [
                 'total'    => $counts['visits'],
                 'migrated' => Visit::count()
-            ]
-        ];
+            ],
+        ], $counts);
 
         $migrationLog = Meta::query()->where('object_type', 'migration')->where('meta_key', 'migration_logs')->first();
 
@@ -127,7 +135,6 @@ class MigrationController extends Controller
 
         if ($request->get('reset_migration') === 'yes') {
             $migrator->updateCurrentStatus([], false);
-            $this->wipeCurrentData();
         }
 
         $previousStatus = $migrator->getCurrentStatus();
@@ -153,7 +160,7 @@ class MigrationController extends Controller
 
         $currentStep = Arr::get($status, 'current_stage', 'affiliate_groups');
 
-        $validStages = ['affiliate_groups', 'affiliates', 'referrals', 'customers', 'payouts', 'visits', 'completed'];
+        $validStages = ['affiliate_groups', 'affiliates', 'referrals', 'customers', 'payouts', 'visits', 'creatives', 'completed'];
 
         if (!in_array($currentStep, $validStages)) {
             return $this->sendError([
@@ -185,25 +192,37 @@ class MigrationController extends Controller
             return $migrator->migratePayouts($status);
         }
 
+        if ($currentStep == 'creatives') {
+            return $migrator->migrateCreatives($status);
+        }
+
         return $migrator->getCurrentStatus();
     }
 
     public function getCurrentDataCounts()
     {
-        $data = [
-            'affiliate_groups' => AffiliateGroup::count(),
-            'affiliates'       => Affiliate::count(),
-            'referrals'        => Referral::count(),
-            'visits'          => Visit::count(),
-            'payouts'         => Payout::count(),
-            'customers'       => Customer::count()
-        ];
+        $data = apply_filters('fluent_affiliate/get_current_data_counts', [
+            'affiliate_groups' => AffiliateGroup::count() ?: 0,
+            'affiliates'       => Affiliate::count() ?: 0,
+            'referrals'        => Referral::count() ?: 0,
+            'visits'           => Visit::count() ?: 0,
+            'payouts'          => Payout::count() ?: 0,
+            'customers'        => Customer::count() ?: 0
+        ]);
 
-        return $data;
+        return $data ?? [];
     }
 
-    public function wipeCurrentData()
+    public function wipeCurrentData(Request $request)
     {
+        $confirmation = $request->getSafe('confirmation', 'sanitize_text_field');
+
+        if ($confirmation !== 'WIPE ALL DATA') {
+            return $this->sendError([
+                'message' => __('Please type "WIPE ALL DATA" to confirm this action.', 'fluent-affiliate')
+            ], 422);
+        }
+
         Helper::dbTransaction(function() {
             Affiliate::truncate();
             AffiliateGroup::truncate();
@@ -214,8 +233,12 @@ class MigrationController extends Controller
             Transaction::truncate();
         });
 
-        update_option('_fla_affwp_migrations_status', []);
+        delete_option('_fla_affwp_migrations_status');
+        delete_option('_fla_wpam_migrations_status');
         delete_option('_fla_solid_affiliate_migrations_status');
+        delete_option('_fla_slicewp_migrations_status');
+
+        do_action('fluent_affiliate/wipe_current_data');
 
         return [
             'message' => __('Data wiped successfully', 'fluent-affiliate')
@@ -232,6 +255,7 @@ class MigrationController extends Controller
             'affiliate_wp' => AffiliateWP::class,
             'affiliate_manager' => AffiliateManagerMigrator::class,
             'solid_affiliate' => SolidAffiliate::class,
+            'slicewp'          => SliceWP::class,
         ];
 
         if (!isset($migratorClasses[$migrator])) {

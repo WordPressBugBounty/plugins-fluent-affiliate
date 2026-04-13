@@ -458,8 +458,8 @@ class Affiliate extends Model
         $affVar   = Utility::getReferralSetting('referral_variable', 'ref');
         $affValue = Utility::getAffiliateParam($this);
 
-        if (! $url) {
-            $url = home_url('/');
+        if (!$url) {
+            $url = apply_filters('fluent_affiliate/default_share_url', home_url('/'), $this);
         }
 
         return add_query_arg($affVar, $affValue, $url);

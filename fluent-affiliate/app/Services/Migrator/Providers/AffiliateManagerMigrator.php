@@ -15,52 +15,6 @@ class AffiliateManagerMigrator extends BaseMigrator
     }
 
     /**
-     * Get counts of source data from Affiliate Manager
-     *
-     * @return array
-     */
-    public function getCounts()
-    {
-        $counts = [
-            'affiliates' => 0,
-            'referrals' => 0,
-            'customers' => 0,
-            'payouts' => 0,
-            'visits' => 0,
-        ];
-
-        try {
-            // Count affiliates
-            $counts['affiliates'] = (int) $this->db()->table('wpam_affiliates')->count();
-
-            // Count referrals (credit, refund, adjustment)
-            $counts['referrals'] = (int) $this->db()->table('wpam_transactions')
-                ->whereIn('type', ['credit', 'refund', 'adjustment'])
-                ->count();
-
-            // Count unique customers from transaction emails
-            $counts['customers'] = (int) $this->db()->table('wpam_transactions')
-                ->selectRaw("COUNT(DISTINCT CONCAT(email, '-', affiliateId)) as count")
-                ->whereIn('type', ['credit', 'refund', 'adjustment'])
-                ->whereNotNull('email')
-                ->where('email', '!=', '')
-                ->value('count');
-
-            // Count payouts
-            $counts['payouts'] = (int) $this->db()->table('wpam_transactions')
-                ->where('type', 'payout')
-                ->count();
-
-            // Count visits
-            $counts['visits'] = (int) $this->db()->table('wpam_tracking_tokens')->count();
-        } catch (\Exception $e) {
-            // If tables don't exist, return zeros
-        }
-
-        return $counts;
-    }
-
-    /**
      * Migrate affiliate groups (skip - not applicable)
      *
      * @param array $status
@@ -487,7 +441,7 @@ class AffiliateManagerMigrator extends BaseMigrator
 
         // If empty, trigger post-migration tasks
         if ($visits->isEmpty()) {
-            $status['current_stage'] = 'completed';
+            $status['current_stage'] = 'creatives';
 
             $status = $this->linkCustomersToReferrals($status);
 
@@ -657,6 +611,67 @@ class AffiliateManagerMigrator extends BaseMigrator
 
         $status['visits_linked'] = $linkedCount;
         return $status;
+    }
+
+    /**
+     * Migrate creatives from slicewp_creatives → fa_creatives.
+     * Only runs if FA Pro creatives table exists.
+     */
+    public function migrateCreatives($status = [])
+    {
+        if (!$status) {
+            $status = $this->getCurrentStatus();
+        }
+
+        $status['current_stage'] = 'completed';
+        $this->updateCurrentStatus($status, false);
+        return $status;
+    }
+
+    public function getCounts()
+    {
+        $counts = [
+            'affiliate_groups' => 0,
+            'affiliates' => 0,
+            'referrals' => 0,
+            'customers' => 0,
+            'payouts' => 0,
+            'visits' => 0,
+            'creatives' => 0,
+        ];
+
+        try {
+            // Count affiliate groups
+            $counts['affiliate_groups'] = (int) $this->db()->table('wpam_affiliate_groups')->count();
+
+            // Count affiliates
+            $counts['affiliates'] = (int) $this->db()->table('wpam_affiliates')->count();
+
+            // Count referrals (credit, refund, adjustment)
+            $counts['referrals'] = (int) $this->db()->table('wpam_transactions')
+                ->whereIn('type', ['credit', 'refund', 'adjustment'])
+                ->count();
+
+            // Count unique customers from transaction emails
+            $counts['customers'] = (int) $this->db()->table('wpam_transactions')
+                ->selectRaw("COUNT(DISTINCT CONCAT(email, '-', affiliateId)) as count")
+                ->whereIn('type', ['credit', 'refund', 'adjustment'])
+                ->whereNotNull('email')
+                ->where('email', '!=', '')
+                ->value('count');
+
+            // Count payouts
+            $counts['payouts'] = (int) $this->db()->table('wpam_transactions')
+                ->where('type', 'payout')
+                ->count();
+
+            // Count visits
+            $counts['visits'] = (int) $this->db()->table('wpam_tracking_tokens')->count();
+        } catch (\Exception $e) {
+            // If tables don't exist, return zeros
+        }
+
+        return $counts;
     }
 
     /**

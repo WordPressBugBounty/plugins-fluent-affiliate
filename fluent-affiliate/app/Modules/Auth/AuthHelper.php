@@ -862,10 +862,10 @@ class AuthHelper
         $count            = 1;
 
         while (! self::isUsernameAvailable($userName)) {
-            $username = $originalUsername . '_' . $count;
+            $userName = $originalUsername . '_' . $count;
             $count++;
         }
 
-        return $username;
+        return $userName;
     }
 }

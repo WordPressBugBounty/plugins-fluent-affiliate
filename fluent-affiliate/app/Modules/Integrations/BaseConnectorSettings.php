@@ -74,25 +74,16 @@ abstract class BaseConnectorSettings
         $config = wp_parse_args($config, $this->config());
 
         if (isset($config['custom_affiliate_rate'])) {
-            if ($config['custom_affiliate_rate'] == 'yes') {
-                $productIds = [];
-                $catIds = [];
-
-                foreach ($config['custom_affiliate_rates'] as $rate) {
-                    if ($rate['object_type'] == 'product') {
-                        $productIds = array_merge($productIds, Arr::get($rate, 'object_ids', []));
-                    } else {
-                        $catIds = array_merge($catIds, Arr::get($rate, 'object_ids', []));
-                    }
-                }
-                $config['watched_product_ids'] = array_values(array_unique($productIds));
-                $config['watched_cat_ids'] = array_values(array_unique($catIds));
-            } else {
-                $config['watched_product_ids'] = [];
-                $config['watched_cat_ids'] = [];
-            }
+            [$config['watched_product_ids'], $config['watched_cat_ids']] = $config['custom_affiliate_rate'] == 'yes'
+                ? $this->buildWatchedIds($config['custom_affiliate_rates'])
+                : [[], []];
         }
 
+        if (isset($config['renewal_custom_affiliate_rate'])) {
+            [$config['renewal_watched_product_ids'], $config['renewal_watched_cat_ids']] = $config['renewal_custom_affiliate_rate'] == 'yes'
+                ? $this->buildWatchedIds($config['renewal_custom_affiliate_rates'])
+                : [[], []];
+        }
 
         Utility::updateOption('_' . $this->integration . '_connector_config', $config);
 
@@ -221,6 +212,25 @@ abstract class BaseConnectorSettings
         }
 
         return $formattedCategories;
+    }
+
+    private function buildWatchedIds(array $rates)
+    {
+        $productIds = [];
+        $catIds     = [];
+
+        foreach ($rates as $rate) {
+            if ($rate['object_type'] == 'product') {
+                $productIds = array_merge($productIds, Arr::get($rate, 'object_ids', []));
+            } else {
+                $catIds = array_merge($catIds, Arr::get($rate, 'object_ids', []));
+            }
+        }
+
+        return [
+            array_values(array_unique(array_map('intval', $productIds))),
+            array_values(array_unique(array_map('intval', $catIds))),
+        ];
     }
 
 }

@@ -2,6 +2,7 @@
 
 namespace FluentAffiliate\App\Http\Controllers;
 
+use FluentAffiliate\App\Helper\Sanitizer;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\AffiliateGroup;
@@ -38,6 +39,45 @@ class AffiliateController extends Controller
 
         return [
             'affiliates' => $affiliates
+        ];
+    }
+
+    public function export(Request $request)
+    {
+        $limit = apply_filters('fluent_affiliate/data_export_limit', 5000);
+
+        $affQuery = Affiliate::query()->with(['user'])
+            ->searchBy($request->getSafe('search', 'sanitize_text_field'))
+            ->byStatus($request->getSafe('status', 'sanitize_text_field'))
+            ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'id'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'));
+
+        $total   = $affQuery->count();
+        $limited = $total > $limit;
+
+        $affiliates = $affQuery->take($limit)->get();
+
+        $affiliates = $affiliates->map(function ($affiliate) {
+            $user = $affiliate->user;
+            return [
+                'id'             => (int) $affiliate->id,
+                'full_name'      => Sanitizer::forCsv($user ? $user->full_name : ''),
+                'email'          => Sanitizer::forCsv($user ? $user->user_email : ''),
+                'payment_email'  => Sanitizer::forCsv($affiliate->payment_email ?? ''),
+                'rate_type'      => $affiliate->rate_type,
+                'rate'           => $affiliate->rate,
+                'status'         => $affiliate->status,
+                'total_earnings' => $affiliate->total_earnings,
+                'unpaid_earnings'=> $affiliate->unpaid_earnings,
+                'referrals'      => (int) $affiliate->referrals,
+                'visits'         => (int) $affiliate->visits,
+                'created_at'     => (string) $affiliate->created_at,
+            ];
+        });
+
+        return [
+            'affiliates' => $affiliates,
+            'limited'    => $limited,
+            'total'      => $total,
         ];
     }
 
@@ -322,6 +362,7 @@ class AffiliateController extends Controller
             ->paginate($request->getSafe('per_page', 'intval', 10));
 
         foreach ($transactions as $transaction) {
+            $transaction->currency_symbol = Utility::getCurrencySymbol($transaction->currency);
             $transaction->referrals_count = Referral::query()
                 ->where('payout_id', $transaction->payout_id)
                 ->count();

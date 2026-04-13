@@ -7,7 +7,7 @@ use FluentAffiliate\App\Models\Payout;
 use FluentAffiliate\App\Models\Referral;
 use FluentAffiliate\App\Models\Transaction;
 use FluentAffiliate\App\Models\Visit;
-use FluentAffiliate\Framework\Request\Request;
+use FluentAffiliate\Framework\Http\Request\Request;
 
 class ReportsController extends Controller
 {

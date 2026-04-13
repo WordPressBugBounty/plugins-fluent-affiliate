@@ -4,6 +4,7 @@ namespace FluentAffiliate\App\Services\Migrator\Providers;
 
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Services\Migrator\BaseMigrator;
+use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\Framework\Support\Arr;
 
 class AffiliateWP extends BaseMigrator
@@ -11,6 +12,13 @@ class AffiliateWP extends BaseMigrator
     public function __construct()
     {
         $this->migratorPrefix = 'affwp';
+    }
+
+    public function migrateAffiliateGroups($status = [], $limit = 100)
+    {
+        $status['current_stage'] = 'affiliates';
+        $this->updateCurrentStatus($status, false);
+        return $status;
     }
 
     public function migrateAffiliates($status = [], $limit = 100)
@@ -102,7 +110,8 @@ class AffiliateWP extends BaseMigrator
             }
 
             $formattedProducts = [];
-            $products = \maybe_unserialize($referral->products);
+
+            $products = Utility::safeUnserialize($referral->products);
 
             if ($products && is_array($products)) {
                 foreach ($products as $product) {
@@ -324,7 +333,7 @@ class AffiliateWP extends BaseMigrator
             ->get();
 
         if ($visits->isEmpty()) {
-            $status['current_stage'] = 'completed';
+            $status['current_stage'] = 'creatives';
             $this->recountEarnings($status);
             $this->updateCurrentStatus($status, false);
             return $status;
@@ -393,9 +402,10 @@ class AffiliateWP extends BaseMigrator
         ];
     }
 
-    public function migrateAffiliateGroups($status = [], $limit = 100)
+    public function migrateCreatives($status = [], $limit = 100)
     {
-        $status['current_stage'] = 'affiliates';
+        // AffiliateWP has no creatives to migrate
+        $status['current_stage'] = 'completed';
         $this->updateCurrentStatus($status, false);
         return $status;
     }

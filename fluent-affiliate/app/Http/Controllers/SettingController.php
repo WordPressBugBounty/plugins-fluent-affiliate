@@ -9,6 +9,7 @@ use FluentAffiliate\App\Services\EmailNotificationSettings;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\Framework\Http\Request\Request;
 use FluentAffiliate\App\Helper\CustomSanitizer;
+use FluentAffiliate\App\Services\AddonService;
 use FluentAffiliate\App\Services\AffiliateService;
 
 class SettingController extends Controller
@@ -224,12 +225,13 @@ class SettingController extends Controller
 
         $enabled = [];
         foreach ($enabledIntegrations as $integration) {
-            $integrationConfig = Arr::get($integrations, $integration, []);
-            if (!$integrationConfig) {
+            $integrationData = Arr::get($integrations, $integration, []);
+            if (!$integrationData) {
                 continue;
             }
 
             $enabled[] = $integration;
+            $integrationConfig = Arr::get($integrationData, 'config', []);
             $integrationConfig['is_enabled'] = 'yes';
             Utility::updateOption('_' . $integration . '_connector_config', $integrationConfig);
         }
@@ -329,7 +331,7 @@ class SettingController extends Controller
             ->limit(20)
             ->get();
 
-        $includedIds = $request->get('included_ids', []);
+        $includedIds = $request->get('include_ids', []);
 
         if ($includedIds) {
             $pushedIds = $users->pluck('ID')->toArray();
@@ -369,4 +371,105 @@ class SettingController extends Controller
             'settings' => AuthHelper::getRegrationSettings()
         ];
     }
+
+    public function getFeatures()
+    {
+        return [
+            'features' => Utility::getFeaturesConfig(),
+            'addons'   => AddonService::getAddons(),
+        ];
+    }
+
+    public function installAddon(Request $request)
+    {
+        $addonKeys = (array) $request->get('addon_keys', []);
+        $addonKeys = array_map('sanitize_text_field', $addonKeys);
+
+        if (empty($addonKeys)) {
+            return $this->sendError([
+                'message' => __('No addon keys provided.', 'fluent-affiliate'),
+            ]);
+        }
+
+        $results = AddonService::installAddons($addonKeys);
+
+        if (isset($results['success']) && !$results['success']) {
+            return $this->sendError([
+                'message' => $results['message'],
+            ]);
+        }
+
+        return [
+            'results' => $results,
+            'message' => __('Addon installation completed.', 'fluent-affiliate'),
+        ];
+    }
+
+    public function getFeatureSettings(Request $request, $feature_key)
+    {
+        $featureKey = sanitize_text_field($feature_key);
+        $registered = array_column(Utility::getRegisteredFeatures(), null, 'key');
+
+        if (!isset($registered[$featureKey])) {
+            return $this->sendError(['message' => __('Unknown feature.', 'fluent-affiliate')]);
+        }
+
+        $saved = Utility::getOption('fluent_affiliate_features', []);
+
+        $response = [
+            'is_enabled'  => Arr::get($saved, $featureKey . '.is_enabled', 'no'),
+            'feature_key' => $featureKey,
+        ];
+
+        return apply_filters('fluent_affiliate/get_feature_settings_' . $featureKey, $response, $saved);
+    }
+
+    public function updateFeatureSettings(Request $request, $feature_key)
+    {
+        $featureKey = sanitize_text_field($feature_key);
+        $registered = array_column(Utility::getRegisteredFeatures(), null, 'key');
+
+        if (!isset($registered[$featureKey])) {
+            return $this->sendError(['message' => __('Unknown feature.', 'fluent-affiliate')]);
+        }
+
+        if (!empty($registered[$featureKey]['is_pro']) && !defined('FLUENT_AFFILIATE_PRO_VERSION')) {
+            return $this->sendError(['message' => __('This feature requires FluentAffiliate Pro.', 'fluent-affiliate')]);
+        }
+
+        $isEnabled = $request->getSafe('is_enabled', 'sanitize_text_field') === 'yes' ? 'yes' : 'no';
+
+        $saved = Utility::getOption('fluent_affiliate_features', []);
+
+        if (!isset($saved[$featureKey])) {
+            $saved[$featureKey] = [];
+        }
+
+        $saved[$featureKey]['is_enabled'] = $isEnabled;
+
+        $settings = apply_filters(
+            'fluent_affiliate/update_feature_settings_' . $featureKey,
+            $request->get('settings', []),
+            $request
+        );
+
+        if (is_wp_error($settings)) {
+            return $this->sendError(['message' => $settings->get_error_message()]);
+        }
+
+        if (!empty($settings)) {
+            $saved[$featureKey]['settings'] = map_deep((array) $settings, 'sanitize_text_field');
+        }
+
+        Utility::updateOption('fluent_affiliate_features', $saved);
+
+        Utility::getFeaturesConfig(true);
+
+        $response = [
+            'message' => __('Feature settings saved successfully.', 'fluent-affiliate'),
+        ];
+
+        return apply_filters('fluent_affiliate/update_feature_response_' . $featureKey, $response, $saved);
+    }
 }
+

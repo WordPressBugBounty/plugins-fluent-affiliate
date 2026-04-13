@@ -72,6 +72,11 @@ class Sanitizer
         $value = is_null($value) ? '' : (string)$value;
 
         $value = sanitize_text_field($value);
+
+        if ($value !== '' && strpbrk($value[0], '=+-@') !== false) {
+            $value = "'" . $value;
+        }
+
         // Escape double quotes by doubling them
         $value = str_replace('"', '""', $value);
         // Wrap the value in double quotes if it contains commas, quotes, or newlines

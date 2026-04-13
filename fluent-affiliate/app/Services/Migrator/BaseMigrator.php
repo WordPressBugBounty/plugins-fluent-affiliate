@@ -127,12 +127,14 @@ abstract class BaseMigrator {
     public function getCurrentStatus()
     {
         $defults = [
-            'migrated_affiliates' => 0,
-            'migrated_referrals'  => 0,
-            'migrated_visits'     => 0,
-            'migrated_payout_id'  => 0,
-            'migrated_customers'  => 0,
-            'current_stage'       => 'affiliates',
+            'migrated_affiliate_groups' => 0,
+            'migrated_affiliates'       => 0,
+            'migrated_referrals'        => 0,
+            'migrated_visits'           => 0,
+            'migrated_payout_id'        => 0,
+            'migrated_customers'        => 0,
+            'migrated_creatives'        => 0,
+            'current_stage'             => 'affiliates',
         ];
 
         $status = (array)get_option('_fla_' . $this->migratorPrefix . '_migrations_status', $defults);
@@ -150,11 +152,13 @@ abstract class BaseMigrator {
         }
 
         $newData = Arr::only($newData, [
+            'migrated_affiliate_groups',
             'migrated_affiliates',
             'migrated_referrals',
             'migrated_visits',
             'migrated_payout_id',
             'migrated_customers',
+            'migrated_creatives',
             'current_stage'
         ]);
 

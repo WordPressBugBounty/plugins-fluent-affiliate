@@ -64,9 +64,9 @@ class Referral extends Model
 
     /**
      * Local scope to filter subscribers by search/query string
-     * @param \FluentCart\Framework\Database\Query\Builder $query
+     * @param \FluentAffiliate\Framework\Database\Query\Builder $query
      * @param string $search
-     * @return \FluentCart\Framework\Database\Query\Builder $query
+     * @return \FluentAffiliate\Framework\Database\Query\Builder $query
      */
     public function scopeSearchBy($query, $search)
     {

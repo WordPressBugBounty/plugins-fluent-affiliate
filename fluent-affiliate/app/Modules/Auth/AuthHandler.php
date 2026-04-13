@@ -30,6 +30,12 @@ class AuthHandler
 
     public function handleUserLogin()
     {
+        if (!check_ajax_referer('fa_auth_nonce', '_fa_auth_nonce', false)) {
+            wp_send_json([
+                'message' => __('Security verification failed. Please reload the page and try again.', 'fluent-affiliate')
+            ], 422);
+        }
+
         if (is_user_logged_in()) {
             $user = get_user_by('ID', get_current_user_id());
             return $this->handleUserLoginSuccess($user);
@@ -83,6 +89,12 @@ class AuthHandler
 
     public function handleExistingUserRegistration()
     {
+        if (!check_ajax_referer('fa_auth_nonce', '_fa_auth_nonce', false)) {
+            wp_send_json([
+                'message' => __('Security verification failed. Please reload the page and try again.', 'fluent-affiliate')
+            ], 422);
+        }
+
         $user = get_user_by('ID', get_current_user_id());
         $affiliate = Affiliate::where('user_id', get_current_user_id())->first();
         if ($affiliate) {
@@ -141,6 +153,12 @@ class AuthHandler
 
     public function handleUserRegistration()
     {
+        if (!check_ajax_referer('fa_auth_nonce', '_fa_auth_nonce', false)) {
+            wp_send_json([
+                'message' => __('Security verification failed. Please reload the page and try again.', 'fluent-affiliate')
+            ], 422);
+        }
+
         if (is_user_logged_in()) {
             $user = get_user_by('ID', get_current_user_id());
             return $this->handleUserLoginSuccess($user);
@@ -165,7 +183,9 @@ class AuthHandler
 
         $validationRules = AuthHelper::getValidationRules();
 
-        if (!empty($requiredFields['username'])) {
+        $isUsernameRequired = Arr::get($fields, 'username.required') === 'yes';
+
+        if ($isUsernameRequired) {
             // remove space and special characters from username
             if (empty($data['username'])) {
                 wp_send_json([
