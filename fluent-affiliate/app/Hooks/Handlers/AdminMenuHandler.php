@@ -183,8 +183,12 @@ class AdminMenuHandler
         if (function_exists('wp_enqueue_media')) {
             // Editor default styles.
             add_filter('user_can_richedit', '__return_true');
-            wp_tinymce_inline_scripts();
-            wp_enqueue_editor();
+            if (function_exists('wp_tinymce_inline_scripts')) {
+                wp_tinymce_inline_scripts();
+            }
+            if (function_exists('wp_enqueue_editor')) {
+                wp_enqueue_editor();
+            }
             wp_enqueue_media();
             if (current_user_can('upload_files')) {
                 wp_enqueue_script('media-upload');
@@ -273,9 +277,10 @@ class AdminMenuHandler
             'currencies'          => Helper::getCurrencies(),
             'referral_formats'    => Helper::getReferralFormats(),
             'integration_types'   => apply_filters('fluent_affiliate/get_integrations', []),
-            'dashboard_notices'   => apply_filters('fluent_affiliate/dashboard_notices', []),
+            'dashboard_notices'   => array_map('wp_kses_post', (array) apply_filters('fluent_affiliate/dashboard_notices', [])),
             'payout_method'       => Utility::getReferralSetting('payout_method', 'paypal'),
             'enable_renewal'      => Utility::getReferralSetting('enable_subscription_renewal', 'no'),
+            'enable_lifetime'     => Utility::getReferralSetting('enable_lifetime_commission', 'no'),
             'has_pro'             => defined('FLUENT_AFFILIATE_PRO_VERSION'),
             'i18n'                => TransStrings::getAdminStrings(),
             'suggested_colors'    => Helper::getSuggestedColors(),

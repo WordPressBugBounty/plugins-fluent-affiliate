@@ -52,22 +52,22 @@ class Utility
 
     public static function getReferralSettings($cached = true)
     {
-        static $settings = null;
-        if ($cached && $settings !== null) {
-            return $settings;
+        static $refSettings = null;
+        if ($cached && $refSettings !== null) {
+            return $refSettings;
         }
 
-        $settings = get_option('_fa_referral_settings', null);
+        $refSettings = get_option('_fa_referral_settings', null);
 
         $defaults = self::defaultReferralSettings();
 
-        if ($settings) {
-            $settings = wp_parse_args($settings, $defaults);
+        if ($refSettings) {
+            $refSettings = wp_parse_args($refSettings, $defaults);
         } else {
-            $settings = $defaults;
+            $refSettings = $defaults;
         }
 
-        return $settings;
+        return $refSettings;
     }
 
     public static function getAffiliateParam($affiliate = null)

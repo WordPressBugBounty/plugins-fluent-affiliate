@@ -27,11 +27,6 @@ class Bootstrap extends BaseConnector
 
     public function addPeningReferral($transactionId, $transactionData)
     {
-        $affiliate = $this->getCurrentAffiliate();
-        if (!$affiliate) {
-            return;
-        }
-
         if ($this->getExistingReferral($transactionData['submission_id'])) {
             return; // Referral already exists for this payment
         }
@@ -46,6 +41,16 @@ class Bootstrap extends BaseConnector
         $formattedData = $this->getFormattedOrderData($payment);
 
         $customerData = $formattedData['customer'];
+
+        $affiliate = $this->getCurrentAffiliate([
+            'user_id' => Arr::get($customerData, 'user_id'),
+            'email'   => Arr::get($customerData, 'email'),
+        ]);
+
+        if (!$affiliate) {
+            return;
+        }
+
         if ($this->isSelfReferred($affiliate, $customerData)) {
             return; // Do not create referral for self-referrals
         }

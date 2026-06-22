@@ -21,7 +21,7 @@ class SolidAffiliate extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_affiliates', 0);
+        $lastId = (int) Arr::get($status, 'migrated_affiliates', 0);
 
         // SA status → FA status
         $affiliateStatusMap = [
@@ -40,8 +40,8 @@ class SolidAffiliate extends BaseMigrator
         // Query solid_affiliate_affiliates table
         $affiliates = $this->db()
             ->table('solid_affiliate_affiliates')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -55,7 +55,7 @@ class SolidAffiliate extends BaseMigrator
         $dataToInsert = [];
 
         foreach ($affiliates as $affiliate) {
-            $migratedCount++;
+            $lastId = $affiliate->id;
 
             $data = [
                 'id'              => $affiliate->id,
@@ -83,7 +83,7 @@ class SolidAffiliate extends BaseMigrator
             // Skip this batch to avoid infinite retry loop
         }
 
-        $status['migrated_affiliates'] = $migratedCount;
+        $status['migrated_affiliates'] = $lastId;
         $this->updateCurrentStatus($status);
 
         if ($this->isTimeLimitExceeded()) {
@@ -99,7 +99,7 @@ class SolidAffiliate extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_referrals', 0);
+        $lastId = (int) Arr::get($status, 'migrated_referrals', 0);
 
         // SA referral status → FA referral status
         $referralStatusMap = [
@@ -118,8 +118,8 @@ class SolidAffiliate extends BaseMigrator
 
         // Query solid_affiliate_referrals table
         $referrals = $this->db()->table('solid_affiliate_referrals')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -133,7 +133,7 @@ class SolidAffiliate extends BaseMigrator
         $referralToInsert = [];
 
         foreach ($referrals as $referral) {
-            $migratedCount++;
+            $lastId = $referral->id;
 
             $data = [
                 'id'            => $referral->id,
@@ -161,7 +161,7 @@ class SolidAffiliate extends BaseMigrator
             // Skip this batch to avoid infinite retry loop
         }
 
-        $status['migrated_referrals'] = $migratedCount;
+        $status['migrated_referrals'] = $lastId;
         $this->updateCurrentStatus($status);
 
         if ($this->isTimeLimitExceeded()) {
@@ -375,7 +375,7 @@ class SolidAffiliate extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_payout_id', 0);
+        $lastId = (int) Arr::get($status, 'migrated_payout_id', 0);
 
         // SA bulk payout status → FA payout status
         $payoutStatusMap = [
@@ -393,8 +393,8 @@ class SolidAffiliate extends BaseMigrator
 
         // Query solid_affiliates_bulk_payouts table
         $payoutGroups = $this->db()->table('solid_affiliates_bulk_payouts')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -415,7 +415,7 @@ class SolidAffiliate extends BaseMigrator
         ;
 
         foreach ($payoutGroups as $payout) {
-            $migratedCount++;
+            $lastId = $payout->id;
 
             // Skip if payout already exists in fa_payouts
             if (in_array($payout->id, $existingPayoutIds)) {
@@ -504,7 +504,7 @@ class SolidAffiliate extends BaseMigrator
             }
         }
 
-        $status['migrated_payout_id'] = $migratedCount;
+        $status['migrated_payout_id'] = $lastId;
         $this->updateCurrentStatus($status);
 
         if ($this->isTimeLimitExceeded()) {
@@ -520,13 +520,13 @@ class SolidAffiliate extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_affiliate_groups', 0);
+        $lastId = (int) Arr::get($status, 'migrated_affiliate_groups', 0);
 
         // Query solid_affiliate_affiliate_groups table
         $affiliateGroups = $this->db()
             ->table('solid_affiliate_affiliate_groups')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -547,7 +547,7 @@ class SolidAffiliate extends BaseMigrator
         $dataToInsert = [];
 
         foreach ($affiliateGroups as $group) {
-            $migratedCount++;
+            $lastId = $group->id;
 
             $rateType = isset($rateTypeMap[$group->commission_type]) ? $rateTypeMap[$group->commission_type] : 'default';
 
@@ -571,7 +571,7 @@ class SolidAffiliate extends BaseMigrator
             // Skip this batch to avoid infinite retry loop
         }
 
-        $status['migrated_affiliate_groups'] = $migratedCount;
+        $status['migrated_affiliate_groups'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -587,27 +587,31 @@ class SolidAffiliate extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_visits', 0);
+        $lastId = (int) Arr::get($status, 'migrated_visits', 0);
 
         // Query solid_affiliate_visits table
         $visits = $this->db()
             ->table('solid_affiliate_visits')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
 
         if ($visits->isEmpty()) {
-            $status['current_stage'] = 'creatives';
-            $this->recountAffiliateEarnings();
+            // Stay in the 'visits' stage until the paginated recount fully completes;
+            // advancing early would leave affiliates past the recount cursor at zero earnings.
+            if ($this->recountAffiliateEarnings()) {
+                $status['current_stage'] = 'creatives';
+            }
+
             $this->updateCurrentStatus($status, false);
             return $status;
         }
 
         $visitItems = [];
         foreach ($visits as $visit) {
-            $migratedCount++;
+            $lastId = $visit->id;
 
             $data = [
                 'id'           => $visit->id,
@@ -629,7 +633,7 @@ class SolidAffiliate extends BaseMigrator
             // Skip this batch to avoid infinite retry loop
         }
 
-        $status['migrated_visits'] = $migratedCount;
+        $status['migrated_visits'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -663,11 +667,42 @@ class SolidAffiliate extends BaseMigrator
         return $data;
     }
 
+    /**
+     * Recount affiliate earnings in keyset-paginated batches so very large
+     * affiliate counts cannot exceed the request time limit and stall the
+     * migration. The cursor stores the last processed affiliate id (not a row
+     * offset) so each batch resumes with an indexed id range instead of an
+     * ever-growing SQL OFFSET scan. Returns true when every affiliate has been
+     * recounted, false when it stopped early on the time limit (the caller must
+     * re-invoke to resume).
+     */
     public function recountAffiliateEarnings()
     {
-        Affiliate::query()->each(function (Affiliate $affiliate) {
+        $lastId = (int) fluentAffiliate_get_option('solid_affiliate_migrated_recount', 0);
+
+        $affiliates = Affiliate::where('id', '>', $lastId)
+            ->orderBy('id', 'ASC')
+            ->limit(100)
+            ->get()
+        ;
+
+        if ($affiliates->isEmpty()) {
+            fluentAffiliate_update_option('solid_affiliate_migrated_recount', 0);
+            return true;
+        }
+
+        foreach ($affiliates as $affiliate) {
             $affiliate->recountEarnings();
-        });
+            $lastId = $affiliate->id;
+        }
+
+        fluentAffiliate_update_option('solid_affiliate_migrated_recount', $lastId);
+
+        if ($this->isTimeLimitExceeded()) {
+            return false;
+        }
+
+        return $this->recountAffiliateEarnings();
     }
 
     public function migrateCreatives($status = [], $limit = 100)

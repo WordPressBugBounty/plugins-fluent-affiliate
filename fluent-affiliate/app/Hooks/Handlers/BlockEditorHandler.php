@@ -52,7 +52,7 @@ class BlockEditorHandler
         });
 
         register_block_type('fluent-affiliate/portal', array(
-            'editor_script'   => 'fluent-affiliate/portal',
+            'editor_script_handles' => ['fluent-affiliate/portal'],
             'render_callback' => array($this, 'faRenderPortalBlock'),
             'attributes'      => [
                 'layout'     => [

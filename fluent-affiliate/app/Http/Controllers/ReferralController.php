@@ -16,7 +16,7 @@ class ReferralController extends Controller
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
             ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'created_at'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'))
-            ->paginate($request->get('per_page', 10));
+            ->paginate($request->getSafe('per_page', 'intval', 10));
 
         foreach ($referrals as $referral) {
             $referral->provider_url = $referral->getProviderReferenceUrl();

@@ -1,12 +1,14 @@
 <?php
 
+defined('ABSPATH') || exit;
+
 /**
  * Enable Query Log
  */
 if (!function_exists('fluentaffiliate_eql')) {
     function fluentaffiliate_eql()
     {
-        defined('SAVEQUERIES') || define('SAVEQUERIES', true);
+        defined('SAVEQUERIES') || define('SAVEQUERIES', true); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- WP core debug constant
     }
 }
 

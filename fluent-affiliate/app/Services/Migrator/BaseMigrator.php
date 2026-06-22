@@ -162,6 +162,14 @@ abstract class BaseMigrator {
             'current_stage'
         ]);
 
+        // A reset (empty payload, no resync) must also clear the paginated
+        // recount cursor; otherwise a restarted migration resumes the recount
+        // from a stale offset, leaving the first affiliates with zero or stale
+        // earnings aggregates.
+        if (empty($newData) && !$resync) {
+            fluentAffiliate_update_option($this->migratorPrefix . '_migrated_recount', 0);
+        }
+
         update_option('_fla_' . $this->migratorPrefix . '_migrations_status', $newData, 'no');
 
         return $newData;

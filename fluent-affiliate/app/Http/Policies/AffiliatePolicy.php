@@ -34,4 +34,9 @@ class AffiliatePolicy extends Policy
     {
         return PermissionManager::hasPayoutAccess(true);
     }
+
+    public function getCustomers(Request $request): bool
+    {
+        return PermissionManager::hasReferralAccess(true);
+    }
 }

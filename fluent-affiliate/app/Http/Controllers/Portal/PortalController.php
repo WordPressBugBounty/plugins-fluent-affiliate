@@ -67,7 +67,7 @@ class PortalController extends Controller
         return [
             'stats'              => $summary,
             'recent_referrals'   => $recentReferrals,
-            'portal_notice_html' => apply_filters('fluent_affiliate/portal_notice_html', ''),
+            'portal_notice_html' => wp_kses_post(apply_filters('fluent_affiliate/portal_notice_html', '')),
         ];
     }
 

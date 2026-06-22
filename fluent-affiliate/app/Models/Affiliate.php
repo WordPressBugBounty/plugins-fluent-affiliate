@@ -419,7 +419,7 @@ class Affiliate extends Model
                         'type'           => 'flat',
                         'rate'           => Arr::get($groupDetails, 'rate', 0),
                         'is_custom'      => 'no',
-                        'human_readable' => Helper::formatMoney(Arr::get($groupDetails, 'rate', 0)) . ' (' . Arr::get($groupDetails, 'name', 'group') . ')',
+                        'human_readable' => Helper::formatMoney(Arr::get($groupDetails, 'rate', 0)) . ' (' . $group->meta_key . ')',
                     ];
                 }
             }

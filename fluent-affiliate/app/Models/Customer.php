@@ -60,4 +60,22 @@ class Customer extends Model
 		return $this->belongsTo(Affiliate::class, 'by_affiliate_id');
 	}
 
+	public function referrals()
+	{
+		return $this->hasMany(Referral::class, 'customer_id');
+	}
+
+	public function scopeSearchBy($query, $search)
+	{
+		if (!$search) {
+			return $query;
+		}
+
+		return $query->where(function ($q) use ($search) {
+			$q->where('email', 'LIKE', "%{$search}%")
+				->orWhere('first_name', 'LIKE', "%{$search}%")
+				->orWhere('last_name', 'LIKE', "%{$search}%");
+		});
+	}
+
 }

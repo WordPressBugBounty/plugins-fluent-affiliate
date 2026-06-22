@@ -70,7 +70,7 @@ class AddonService
                 'plugin_file'  => 'fluent-crm/fluent-crm.php',
                 'is_repo'      => true,
                 'is_installed' => defined('FLUENTCRM'),
-                'settings_url' => admin_url('admin.php?page=fluentcrm#/'),
+                'settings_url' => admin_url('admin.php?page=fluentcrm-admin#/'),
                 'action_text'  => self::isPluginInstalled('fluent-crm/fluent-crm.php')
                     ? __('Activate FluentCRM', 'fluent-affiliate')
                     : __('Install FluentCRM', 'fluent-affiliate'),

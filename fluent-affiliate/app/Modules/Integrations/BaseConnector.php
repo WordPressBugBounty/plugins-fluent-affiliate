@@ -26,9 +26,12 @@ class BaseConnector
         return $visit;
     }
 
-    public function getCurrentAffiliate()
+    public function getCurrentAffiliate($customerData = [])
     {
-        return Utility::getCurrentCookieAffiliate();
+        $affiliate = Utility::getCurrentCookieAffiliate();
+
+        // Cookie affiliate wins; when null, Pro lifetime may resolve a fallback from $customerData.
+        return apply_filters('fluent_affiliate/checkout_affiliate', $affiliate, $customerData, $this->provider);
     }
 
     public function addOrUpdateCustomer($data = [])
@@ -69,10 +72,12 @@ class BaseConnector
      */
     public function recordReferral($data)
     {
+        $data = apply_filters('fluent_affiliate/referral_data', $data, $this->provider);
+
         $amount = Arr::get($data, 'amount', 0);
         $type = Arr::get($data, 'type', 'sale');
 
-        if ($amount <= 0 && in_array($type, ['sale', 'recurring_sale']) && apply_filters('fluent_affiliate/ignore_zero_amount_referral', true, $data)) {
+        if ($amount <= 0 && in_array($type, ['sale', 'recurring_sale', 'lifetime_sale']) && apply_filters('fluent_affiliate/ignore_zero_amount_referral', true, $data)) {
             return null;
         }
 
@@ -189,7 +194,7 @@ class BaseConnector
 
     public function isSelfReferred(Affiliate $affiliate, $customerData = [])
     {
-        if (Utility::getReferralSetting('self_referral_disabled') !== 'no') {
+        if (Utility::getReferralSetting('self_referral_disabled') === 'no') {
             return false;
         }
 

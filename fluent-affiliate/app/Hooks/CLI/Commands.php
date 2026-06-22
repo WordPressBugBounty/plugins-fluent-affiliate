@@ -101,31 +101,37 @@ class Commands
 
         $this->migrateAffiliateWpVisits();
 
+        // Reset the shared keyset cursor so the recount starts from the first
+        // affiliate id, matching migrate_from_slicewp and the web provider.
+        fluentAffiliate_update_option('affwp_migrated_recount', 0);
         $this->recount_earnings();
     }
 
     public function recount_earnings()
     {
-        $migratedCount = fluentAffiliate_get_option('affwp_migrated_recount', 0);
+        // Keyset cursor: stores the last processed affiliate id (not a row
+        // offset) so it shares the same semantics as the provider migrators
+        // that read/write the same affwp_migrated_recount option.
+        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_recount', 0);
 
-        $affiliates = Affiliate::orderBy('id', 'ASC')
-            ->offset($migratedCount)
+        $affiliates = Affiliate::where('id', '>', $lastId)
+            ->orderBy('id', 'ASC')
             ->limit(100)
             ->get()
         ;
 
         if ($affiliates->isEmpty()) {
-            \WP_CLI::log(sprintf("Total %d affiliates recount done", $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log("Affiliate recount done");
+            return $lastId;
         }
 
         foreach ($affiliates as $affiliate) {
             $affiliate->recountEarnings();
-            $migratedCount = $migratedCount + 1;
-            fluentAffiliate_update_option('affwp_migrated_recount', $migratedCount);
+            $lastId = $affiliate->id;
+            fluentAffiliate_update_option('affwp_migrated_recount', $lastId);
         }
 
-        \WP_CLI::log(sprintf("Recounted %d affiliates.....", $migratedCount));
+        \WP_CLI::log(sprintf("Recounted affiliates up to #%d.....", $lastId));
 
         $this->recount_earnings();
 
@@ -133,17 +139,17 @@ class Commands
 
     private function migrateAffiliateWpAffiliates()
     {
-        $migratedCount = fluentAffiliate_get_option('affwp_migrated_affiliates', 0);
+        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_affiliates', 0);
 
         $affiliates = FluentAffiliate('db')->table('affiliate_wp_affiliates')
+            ->where('affiliate_id', '>', $lastId)
             ->orderBy('affiliate_id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($affiliates->isEmpty()) {
-            \WP_CLI::log(sprintf("Total %d affiliates migration done", $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log("Affiliate migration done");
+            return $lastId;
         }
 
         foreach ($affiliates as $affiliate) {
@@ -166,28 +172,28 @@ class Commands
             ];
 
             FluentAffiliate('db')->table('fa_affiliates')->insert($data);
-            $migratedCount = $migratedCount + 1;
-            fluentAffiliate_update_option('affwp_migrated_affiliates', $migratedCount);
+            $lastId = $affiliate->affiliate_id;
+            fluentAffiliate_update_option('affwp_migrated_affiliates', $lastId);
         }
 
-        \WP_CLI::log(sprintf("Migrated %d affiliates.....", $migratedCount));
+        \WP_CLI::log(sprintf("Migrated affiliates up to #%d.....", $lastId));
 
         $this->migrateAffiliateWpAffiliates();
     }
 
     private function migrateAffiliateWpReferrals()
     {
-        $migratedCount = fluentAffiliate_get_option('affwp_migrated_referrals', 0);
+        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_referrals', 0);
 
         $referrals = FluentAffiliate('db')->table('affiliate_wp_referrals')
+            ->where('referral_id', '>', $lastId)
             ->orderBy('referral_id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($referrals->isEmpty()) {
-            \WP_CLI::log(sprintf("Total %d referrals migration done", $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log("Referral migration done");
+            return $lastId;
         }
 
         foreach ($referrals as $referral) {
@@ -252,11 +258,11 @@ class Commands
             ]);
 
             FluentAffiliate('db')->table('fa_referrals')->insert($data);
-            $migratedCount = $migratedCount + 1;
-            fluentAffiliate_update_option('affwp_migrated_referrals', $migratedCount);
+            $lastId = $referral->referral_id;
+            fluentAffiliate_update_option('affwp_migrated_referrals', $lastId);
         }
 
-        \WP_CLI::log(sprintf("Migrated %d referrals.....", $migratedCount));
+        \WP_CLI::log(sprintf("Migrated referrals up to #%d.....", $lastId));
 
         $this->migrateAffiliateWpReferrals();
 
@@ -264,17 +270,17 @@ class Commands
 
     private function migrateAffiliateWpCustomers()
     {
-        $migratedCount = fluentAffiliate_get_option('affwp_migrated_customers', 0);
+        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_customers', 0);
 
         $customers = FluentAffiliate('db')->table('affiliate_wp_customers')
+            ->where('customer_id', '>', $lastId)
             ->orderBy('customer_id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($customers->isEmpty()) {
-            \WP_CLI::log(sprintf("Total %d customers migration done", $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log("Customer migration done");
+            return $lastId;
         }
 
         foreach ($customers as $customer) {
@@ -299,11 +305,11 @@ class Commands
             }
 
             FluentAffiliate('db')->table('fa_customers')->insert($data);
-            $migratedCount = $migratedCount + 1;
-            fluentAffiliate_update_option('affwp_migrated_customers', $migratedCount);
+            $lastId = $customer->customer_id;
+            fluentAffiliate_update_option('affwp_migrated_customers', $lastId);
         }
 
-        \WP_CLI::log(sprintf("Migrated %d customers.....", $migratedCount));
+        \WP_CLI::log(sprintf("Migrated customers up to #%d.....", $lastId));
 
         $this->migrateAffiliateWpCustomers();
     }
@@ -404,17 +410,17 @@ class Commands
 
     private function migrateAffiliateWpVisits()
     {
-        $migratedCount = fluentAffiliate_get_option('affwp_migrated_visits', 0);
+        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_visits', 0);
 
         $visits = FluentAffiliate('db')->table('affiliate_wp_visits')
+            ->where('visit_id', '>', $lastId)
             ->orderBy('visit_id', 'ASC')
-            ->offset($migratedCount)
             ->limit(1000)
             ->get();
 
         if ($visits->isEmpty()) {
-            \WP_CLI::log(sprintf("Total %d visits migration done", $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log("Visit migration done");
+            return $lastId;
         }
 
         foreach ($visits as $visit) {
@@ -432,11 +438,11 @@ class Commands
             ]);
 
             FluentAffiliate('db')->table('fa_visits')->insert($data);
-            $migratedCount = $migratedCount + 1;
-            fluentAffiliate_update_option('affwp_migrated_visits', $migratedCount);
+            $lastId = $visit->visit_id;
+            fluentAffiliate_update_option('affwp_migrated_visits', $lastId);
         }
 
-        \WP_CLI::log(sprintf("Migrated %d visits.....", $migratedCount));
+        \WP_CLI::log(sprintf("Migrated visits up to #%d.....", $lastId));
 
         $this->migrateAffiliateWpVisits();
     }
@@ -758,12 +764,46 @@ class Commands
             Visit::truncate();
         }
         $this->migrateSolidAffiliateVisits();
-        $this->recount_earnings();
+
+        // Reset the keyset recount cursor so a stale value from a prior run
+        // cannot skip affiliates, then recount through the Solid Affiliate
+        // cursor (the same option the web Solid provider uses).
+        fluentAffiliate_update_option('solid_affiliate_migrated_recount', 0);
+        $this->recountSolidAffiliateEarnings();
+    }
+
+    private function recountSolidAffiliateEarnings()
+    {
+        // Keyset cursor: stores the last processed affiliate id (not a row
+        // offset) so it shares the same semantics as the Solid Affiliate
+        // provider migrator that reads/writes solid_affiliate_migrated_recount.
+        $lastId = (int) fluentAffiliate_get_option('solid_affiliate_migrated_recount', 0);
+
+        $affiliates = Affiliate::where('id', '>', $lastId)
+            ->orderBy('id', 'ASC')
+            ->limit(100)
+            ->get()
+        ;
+
+        if ($affiliates->isEmpty()) {
+            \WP_CLI::log('Affiliate recount done');
+            return;
+        }
+
+        foreach ($affiliates as $affiliate) {
+            $affiliate->recountEarnings();
+            $lastId = $affiliate->id;
+            fluentAffiliate_update_option('solid_affiliate_migrated_recount', $lastId);
+        }
+
+        \WP_CLI::log(sprintf('Recounted affiliates up to #%d.....', $lastId));
+
+        $this->recountSolidAffiliateEarnings();
     }
 
     private function migrateSolidAffiliateGroups()
     {
-        $migratedCount = fluentAffiliate_get_option('solid_migrated_affiliate_groups', 0);
+        $lastId = (int) fluentAffiliate_get_option('solid_migrated_affiliate_groups', 0);
 
         $affiliateGroupColumnsMap = [
             'name'            => 'meta_key',
@@ -780,15 +820,15 @@ class Commands
 
         $affiliateGroups = FluentAffiliate('db')
             ->table('solid_affiliate_affiliate_groups')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get()
         ;
 
         if ($affiliateGroups->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d affiliate groups migration done', $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log('Affiliate groups migration done');
+            return $lastId;
         }
 
         $dataToInsert = [];
@@ -811,7 +851,7 @@ class Commands
             $data['value'] = maybe_serialize($valueData);
             $data['object_type'] = 'affiliate_group';
             $dataToInsert[] = $data;
-            $migratedCount++;
+            $lastId = $group->id;
         }
 
         try {
@@ -820,15 +860,15 @@ class Commands
             \WP_CLI::error('Error migrating affiliate groups: ' . $e->getMessage());
         }
 
-        fluentAffiliate_update_option('solid_migrated_affiliate_groups', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d affiliate groups.....', $migratedCount));
+        fluentAffiliate_update_option('solid_migrated_affiliate_groups', $lastId);
+        \WP_CLI::log(sprintf('Migrated affiliate groups up to #%d.....', $lastId));
 
         $this->migrateSolidAffiliateGroups();
     }
 
     private function migrateSolidAffiliateAffiliates()
     {
-        $migratedCount = fluentAffiliate_get_option('solid_migrated_affiliates', 0);
+        $lastId = (int) fluentAffiliate_get_option('solid_migrated_affiliates', 0);
 
         $affiliateStatusMap = [
             'approved' => 'active',
@@ -852,15 +892,15 @@ class Commands
 
         $affiliates = FluentAffiliate('db')
             ->table('solid_affiliate_affiliates')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get()
         ;
 
         if ($affiliates->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d affiliates migration done', $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log('Affiliates migration done');
+            return $lastId;
         }
 
         $dataToInsert = [];
@@ -884,7 +924,7 @@ class Commands
             ]);
 
             $dataToInsert[] = $data;
-            $migratedCount++;
+            $lastId = $affiliate->id;
         }
 
         try {
@@ -893,15 +933,15 @@ class Commands
             \WP_CLI::error('Error migrating affiliates: ' . $e->getMessage());
         }
 
-        fluentAffiliate_update_option('solid_migrated_affiliates', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d affiliates.....', $migratedCount));
+        fluentAffiliate_update_option('solid_migrated_affiliates', $lastId);
+        \WP_CLI::log(sprintf('Migrated affiliates up to #%d.....', $lastId));
 
         $this->migrateSolidAffiliateAffiliates();
     }
 
     private function migrateSolidAffiliateReferrals()
     {
-        $migratedCount = fluentAffiliate_get_option('solid_migrated_referrals', 0);
+        $lastId = (int) fluentAffiliate_get_option('solid_migrated_referrals', 0);
 
         $referralStatusMap = [
             'unpaid'   => 'unpaid',
@@ -929,14 +969,14 @@ class Commands
         ];
 
         $referrals = FluentAffiliate('db')->table('solid_affiliate_referrals')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($referrals->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d referrals migration done', $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log('Referrals migration done');
+            return $lastId;
         }
 
         $referralToInsert = [];
@@ -962,7 +1002,7 @@ class Commands
             ]);
 
             $referralToInsert[] = $data;
-            $migratedCount++;
+            $lastId = $referral->id;
         }
 
         try {
@@ -971,8 +1011,8 @@ class Commands
             \WP_CLI::error('Error migrating referrals: ' . $e->getMessage());
         }
 
-        fluentAffiliate_update_option('solid_migrated_referrals', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d referrals.....', $migratedCount));
+        fluentAffiliate_update_option('solid_migrated_referrals', $lastId);
+        \WP_CLI::log(sprintf('Migrated referrals up to #%d.....', $lastId));
 
         $this->migrateSolidAffiliateReferrals();
     }
@@ -1060,7 +1100,7 @@ class Commands
 
     private function migrateSolidAffiliatePayouts()
     {
-        $migratedCount = fluentAffiliate_get_option('solid_migrated_payout_id', 0);
+        $lastId = (int) fluentAffiliate_get_option('solid_migrated_payout_id', 0);
 
         $payoutTransactionsColumnsMap = [
             'affiliate_id'       => 'affiliate_id',
@@ -1092,15 +1132,15 @@ class Commands
                 'currency',
                 'status'
             ])
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get()
         ;
 
         if ($payoutGroups->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d payouts migration done', $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log('Payouts migration done');
+            return $lastId;
         }
 
         $db = FluentAffiliate('db');
@@ -1111,8 +1151,9 @@ class Commands
         ;
 
         foreach ($payoutGroups as $payout) {
+            $lastId = $payout->id;
+
             if (in_array($payout->id, $existingPayoutIds)) {
-                $migratedCount++;
                 continue;
             }
 
@@ -1129,7 +1170,6 @@ class Commands
             ;
 
             if ($transactions->isEmpty()) {
-                $migratedCount++;
                 continue;
             }
 
@@ -1192,21 +1232,20 @@ class Commands
                     }
                 }
 
-                $migratedCount++;
             } catch (\Exception $e) {
                 \WP_CLI::error('Error migrating payouts: ' . $e->getMessage());
             }
         }
 
-        fluentAffiliate_update_option('solid_migrated_payout_id', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d payouts.....', $migratedCount));
+        fluentAffiliate_update_option('solid_migrated_payout_id', $lastId);
+        \WP_CLI::log(sprintf('Migrated payouts up to #%d.....', $lastId));
 
         $this->migrateSolidAffiliatePayouts();
     }
 
     private function migrateSolidAffiliateVisits()
     {
-        $migratedCount = fluentAffiliate_get_option('solid_migrated_visits', 0);
+        $lastId = (int) fluentAffiliate_get_option('solid_migrated_visits', 0);
 
         $visitsColumnsMap = [
             'id'                => 'id',
@@ -1222,15 +1261,15 @@ class Commands
 
         $visits = FluentAffiliate('db')
             ->table('solid_affiliate_visits')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get()
         ;
 
         if ($visits->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d visits migration done', $migratedCount));
-            return $migratedCount;
+            \WP_CLI::log('Visits migration done');
+            return $lastId;
         }
 
         $visitItems = [];
@@ -1250,7 +1289,7 @@ class Commands
             ], $data);
 
             $visitItems[] = $data;
-            $migratedCount++;
+            $lastId = $visit->id;
         }
 
         try {
@@ -1259,8 +1298,8 @@ class Commands
             \WP_CLI::error('Error migrating visits: ' . $e->getMessage());
         }
 
-        fluentAffiliate_update_option('solid_migrated_visits', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d visits.....', $migratedCount));
+        fluentAffiliate_update_option('solid_migrated_visits', $lastId);
+        \WP_CLI::log(sprintf('Migrated visits up to #%d.....', $lastId));
 
         $this->migrateSolidAffiliateVisits();
     }
@@ -1283,6 +1322,75 @@ class Commands
         // Use the new temporary CLI migration class
         $migrator = new \FluentAffiliate\App\Services\Migrator\CLI\AffiliateManagerMigrationCLI();
         $migrator->migrate();
+    }
+
+    public function migrate_from_ultimate_affiliate()
+    {
+        if (!defined('UAP_PLUGIN_VER')) {
+            \WP_CLI::error('Ultimate Affiliate (UAP) is not active. Nothing to migrate.');
+            return;
+        }
+
+        // Drive the shared, already-verified UltimateAffiliate provider rather
+        // than reimplementing each stage. The provider deduplicates by source
+        // id, so re-running is idempotent without truncating fa_* tables.
+        $migrator = new \FluentAffiliate\App\Services\Migrator\Providers\UltimateAffiliate();
+
+        // Start a fresh run: clear the staged cursors and the recount cursor,
+        // then begin at the first stage.
+        $migrator->updateCurrentStatus([], false);
+        fluentAffiliate_update_option('ultimate_affiliate_migrated_recount', 0);
+
+        $status = $migrator->getCurrentStatus();
+        $status['current_stage'] = 'affiliate_groups';
+        $migrator->updateCurrentStatus($status, false);
+
+        $stageMethods = [
+            'affiliate_groups' => 'migrateAffiliateGroups',
+            'affiliates'       => 'migrateAffiliates',
+            'referrals'        => 'migrateReferrals',
+            'customers'        => 'migrateCustomers',
+            'payouts'          => 'migratePayouts',
+            'visits'           => 'migrateVisits',
+            'creatives'        => 'migrateCreatives',
+        ];
+
+        \WP_CLI::log('Starting Ultimate Affiliate migration...');
+
+        $guard = 0;
+        while (true) {
+            // Fresh time budget each dispatch; a stage that exceeds it returns
+            // without advancing and is resumed from its keyset cursor on the
+            // next iteration, so progress is monotonic.
+            $migrator->setTimeLimit(Utility::getMaxRunTime());
+
+            $status = $migrator->getCurrentStatus();
+            $stage = Arr::get($status, 'current_stage', 'affiliate_groups');
+
+            if ($stage === 'completed') {
+                break;
+            }
+
+            if (!isset($stageMethods[$stage])) {
+                \WP_CLI::error(sprintf('Unknown migration stage "%s". Aborting.', $stage));
+                return;
+            }
+
+            $method = $stageMethods[$stage];
+            $migrator->{$method}($status);
+
+            if (Arr::get($migrator->getCurrentStatus(), 'current_stage', $stage) !== $stage) {
+                \WP_CLI::log(sprintf('Stage "%s" done.', $stage));
+            }
+
+            // Backstop against an unexpected non-advancing stage.
+            if (++$guard > 100000) {
+                \WP_CLI::error('Migration exceeded the maximum number of batches; aborting to avoid a loop.');
+                return;
+            }
+        }
+
+        \WP_CLI::success('Ultimate Affiliate migration completed.');
     }
 
     public function migrate_from_slicewp()
@@ -1377,20 +1485,20 @@ class Commands
 
     private function migrateSliceWPAffiliateGroups()
     {
-        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_affiliate_groups', 0);
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_affiliate_groups', 0);
 
         $db = FluentAffiliate('db');
 
         $groups = $db->table('slicewp_collections')
             ->where('object_context', 'affiliate')
             ->where('type', 'group')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($groups->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d affiliate groups migration done', $migratedCount));
+            \WP_CLI::log('Affiliate groups migration done');
             return;
         }
 
@@ -1416,7 +1524,7 @@ class Commands
         $dataToInsert = [];
 
         foreach ($groups as $group) {
-            $migratedCount++;
+            $lastId = $group->id;
 
             if (in_array($group->name, $existingNames)) {
                 continue;
@@ -1445,15 +1553,15 @@ class Commands
             }
         }
 
-        fluentAffiliate_update_option('slicewp_migrated_affiliate_groups', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d affiliate groups.....', $migratedCount));
+        fluentAffiliate_update_option('slicewp_migrated_affiliate_groups', $lastId);
+        \WP_CLI::log(sprintf('Migrated affiliate groups up to #%d.....', $lastId));
 
         $this->migrateSliceWPAffiliateGroups();
     }
 
     private function migrateSliceWPAffiliates()
     {
-        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_affiliates', 0);
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_affiliates', 0);
 
         $db = FluentAffiliate('db');
 
@@ -1467,13 +1575,13 @@ class Commands
         $rateTypeMap = ['percentage' => 'percentage', 'flat' => 'flat'];
 
         $affiliates = $db->table('slicewp_affiliates')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($affiliates->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d affiliates migration done', $migratedCount));
+            \WP_CLI::log('Affiliates migration done');
             return;
         }
 
@@ -1511,7 +1619,7 @@ class Commands
 
         foreach ($affiliates as $affiliate) {
             $affId = $affiliate->id;
-            $migratedCount++;
+            $lastId = $affId;
 
             $rate      = null;
             $faRateType = 'default';
@@ -1555,15 +1663,15 @@ class Commands
             }
         }
 
-        fluentAffiliate_update_option('slicewp_migrated_affiliates', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d affiliates.....', $migratedCount));
+        fluentAffiliate_update_option('slicewp_migrated_affiliates', $lastId);
+        \WP_CLI::log(sprintf('Migrated affiliates up to #%d.....', $lastId));
 
         $this->migrateSliceWPAffiliates();
     }
 
     private function migrateSliceWPReferrals()
     {
-        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_referrals', 0);
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_referrals', 0);
 
         $db = FluentAffiliate('db');
 
@@ -1575,20 +1683,20 @@ class Commands
         ];
 
         $commissions = $db->table('slicewp_commissions')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($commissions->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d referrals migration done', $migratedCount));
+            \WP_CLI::log('Referrals migration done');
             return;
         }
 
         $dataToInsert = [];
 
         foreach ($commissions as $commission) {
-            $migratedCount++;
+            $lastId = $commission->id;
 
             $dataToInsert[] = [
                 'id'              => $commission->id,
@@ -1616,33 +1724,33 @@ class Commands
             \WP_CLI::warning('Error migrating referrals: ' . $e->getMessage());
         }
 
-        fluentAffiliate_update_option('slicewp_migrated_referrals', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d referrals.....', $migratedCount));
+        fluentAffiliate_update_option('slicewp_migrated_referrals', $lastId);
+        \WP_CLI::log(sprintf('Migrated referrals up to #%d.....', $lastId));
 
         $this->migrateSliceWPReferrals();
     }
 
     private function migrateSliceWPCustomers()
     {
-        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_customers', 0);
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_customers', 0);
 
         $db = FluentAffiliate('db');
 
         $customers = $db->table('slicewp_customers')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($customers->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d customers migration done', $migratedCount));
+            \WP_CLI::log('Customers migration done');
             return;
         }
 
         $dataToInsert = [];
 
         foreach ($customers as $customer) {
-            $migratedCount++;
+            $lastId = $customer->id;
 
             $dataToInsert[] = [
                 'id'              => $customer->id,
@@ -1662,15 +1770,15 @@ class Commands
             \WP_CLI::warning('Error migrating customers: ' . $e->getMessage());
         }
 
-        fluentAffiliate_update_option('slicewp_migrated_customers', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d customers.....', $migratedCount));
+        fluentAffiliate_update_option('slicewp_migrated_customers', $lastId);
+        \WP_CLI::log(sprintf('Migrated customers up to #%d.....', $lastId));
 
         $this->migrateSliceWPCustomers();
     }
 
     private function migrateSliceWPPayouts()
     {
-        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_payout_id', 0);
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_payout_id', 0);
 
         $db = FluentAffiliate('db');
 
@@ -1683,13 +1791,13 @@ class Commands
         ];
 
         $payouts = $db->table('slicewp_payouts')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(50)
             ->get();
 
         if ($payouts->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d payouts migration done', $migratedCount));
+            \WP_CLI::log('Payouts migration done');
             return;
         }
 
@@ -1705,7 +1813,7 @@ class Commands
         }
 
         foreach ($payouts as $payout) {
-            $migratedCount++;
+            $lastId = $payout->id;
 
             $payments = $paymentsByPayout[$payout->id] ?? [];
 
@@ -1759,33 +1867,33 @@ class Commands
             }
         }
 
-        fluentAffiliate_update_option('slicewp_migrated_payout_id', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d payouts.....', $migratedCount));
+        fluentAffiliate_update_option('slicewp_migrated_payout_id', $lastId);
+        \WP_CLI::log(sprintf('Migrated payouts up to #%d.....', $lastId));
 
         $this->migrateSliceWPPayouts();
     }
 
     private function migrateSliceWPVisits()
     {
-        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_visits', 0);
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_visits', 0);
 
         $db = FluentAffiliate('db');
 
         $visits = $db->table('slicewp_visits')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(1000)
             ->get();
 
         if ($visits->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d visits migration done', $migratedCount));
+            \WP_CLI::log('Visits migration done');
             return;
         }
 
         $dataToInsert = [];
 
         foreach ($visits as $visit) {
-            $migratedCount++;
+            $lastId = $visit->id;
 
             $dataToInsert[] = [
                 'id'           => $visit->id,
@@ -1806,8 +1914,8 @@ class Commands
             \WP_CLI::warning('Error migrating visits: ' . $e->getMessage());
         }
 
-        fluentAffiliate_update_option('slicewp_migrated_visits', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d visits.....', $migratedCount));
+        fluentAffiliate_update_option('slicewp_migrated_visits', $lastId);
+        \WP_CLI::log(sprintf('Migrated visits up to #%d.....', $lastId));
 
         $this->migrateSliceWPVisits();
     }
@@ -1823,20 +1931,20 @@ class Commands
             return;
         }
 
-        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_creatives', 0);
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_creatives', 0);
 
         $db = FluentAffiliate('db');
 
         $validTypes = ['image', 'qr_code', 'text'];
 
         $creatives = $db->table('slicewp_creatives')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit(100)
             ->get();
 
         if ($creatives->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d creatives migration done', $migratedCount));
+            \WP_CLI::log('Creatives migration done');
             return;
         }
 
@@ -1850,7 +1958,7 @@ class Commands
         $dataToInsert = [];
 
         foreach ($creatives as $creative) {
-            $migratedCount++;
+            $lastId = $creative->id;
 
             if (isset($existingNames[$creative->name])) {
                 continue;
@@ -1879,33 +1987,36 @@ class Commands
             }
         }
 
-        fluentAffiliate_update_option('slicewp_migrated_creatives', $migratedCount);
-        \WP_CLI::log(sprintf('Migrated %d creatives.....', $migratedCount));
+        fluentAffiliate_update_option('slicewp_migrated_creatives', $lastId);
+        \WP_CLI::log(sprintf('Migrated creatives up to #%d.....', $lastId));
 
         $this->migrateSliceWPCreatives();
     }
 
     private function recountSliceWPEarnings()
     {
-        $migratedCount = fluentAffiliate_get_option('slicewp_migrated_recount', 0);
+        // Keyset cursor: stores the last processed affiliate id (not a row
+        // offset) so it shares the same semantics as the provider migrators
+        // that read/write the same slicewp_migrated_recount option.
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_recount', 0);
 
-        $affiliates = Affiliate::orderBy('id', 'ASC')
-            ->offset($migratedCount)
+        $affiliates = Affiliate::where('id', '>', $lastId)
+            ->orderBy('id', 'ASC')
             ->limit(100)
             ->get();
 
         if ($affiliates->isEmpty()) {
-            \WP_CLI::log(sprintf('Total %d affiliates recount done', $migratedCount));
+            \WP_CLI::log('Affiliate recount done');
             return;
         }
 
         foreach ($affiliates as $affiliate) {
             $affiliate->recountEarnings();
-            $migratedCount++;
-            fluentAffiliate_update_option('slicewp_migrated_recount', $migratedCount);
+            $lastId = $affiliate->id;
+            fluentAffiliate_update_option('slicewp_migrated_recount', $lastId);
         }
 
-        \WP_CLI::log(sprintf('Recounted %d affiliates.....', $migratedCount));
+        \WP_CLI::log(sprintf('Recounted affiliates up to #%d.....', $lastId));
 
         $this->recountSliceWPEarnings();
     }

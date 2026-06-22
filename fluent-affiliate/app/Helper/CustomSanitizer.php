@@ -38,6 +38,8 @@ class CustomSanitizer
 
             if ($type === 'number') {
                 $data[$field] = is_numeric($value) ? intval($value) : 0;
+            } elseif ($type === 'float') {
+                $data[$field] = is_numeric($value) ? (float) $value : 0;
             } elseif (is_array($type)) {
                 $data[$field] = in_array($value, $type, true) ? $value : $type[0];
             } else {

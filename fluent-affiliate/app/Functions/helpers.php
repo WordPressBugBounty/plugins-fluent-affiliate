@@ -2,6 +2,8 @@
 
 use FluentAffiliate\App\App;
 
+defined('ABSPATH') || exit;
+
 /*
  * var $app \FluentAffiliate\Framework\Foundation\Application
  */

@@ -44,7 +44,10 @@ class Bootstrap extends BaseConnector
 
     public function storeBookingReference(Order $order, Booking $booking, CalendarSlot $calendarSlot, $bookingData)
     {
-        $affiliate = $this->getCurrentAffiliate();
+        $affiliate = $this->getCurrentAffiliate([
+            'user_id' => $booking->person_user_id,
+            'email'   => $booking->email,
+        ]);
         if ((!$affiliate || $affiliate->status != 'active') || $this->getExistingReferral($booking->id)) {
             return;
         }
@@ -112,6 +115,9 @@ class Bootstrap extends BaseConnector
         ];
 
         $referral = $this->recordReferral($referralData);
+        if (!$referral) {
+            return;
+        }
 
         $referralLink = Utility::getAdminPageUrl('referrals/' . $referral->id . '/view');
 

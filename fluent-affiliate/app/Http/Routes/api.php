@@ -39,6 +39,7 @@ $router->prefix('affiliates')->withPolicy('AffiliatePolicy')->group(function ($r
     $router->get('/{id}/transactions', [AffiliateController::class, 'getTransactions'])->int('id');
     $router->get('/{id}/visits', [AffiliateController::class, 'getVisits'])->int('id');
     $router->get('/{id}/referrals', [AffiliateController::class, 'getReferrals'])->int('id');
+    $router->get('/{id}/customers', [AffiliateController::class, 'getCustomers'])->int('id');
     $router->get('/{id}/stats', [AffiliateController::class, 'getOverviewStats'])->int('id');
     $router->get('/{id}/statistics', [AffiliateController::class, 'statistics'])->int('id');
 });

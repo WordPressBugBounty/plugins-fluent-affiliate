@@ -6,6 +6,7 @@ use FluentAffiliate\App\Helper\Sanitizer;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\AffiliateGroup;
+use FluentAffiliate\App\Models\Customer;
 use FluentAffiliate\App\Models\Referral;
 use FluentAffiliate\App\Models\Transaction;
 use FluentAffiliate\App\Models\User;
@@ -348,6 +349,34 @@ class AffiliateController extends Controller
         return [
             'referrals' => $referrals
         ];
+    }
+
+    public function getCustomers(Request $request, $affiliateId)
+    {
+        $affiliate = Affiliate::query()->findOrFail($affiliateId);
+
+        $orderBy = $request->getSafe('order_by', 'sanitize_text_field', 'id');
+        $orderBy = in_array($orderBy, ['id', 'created_at', 'email'], true) ? $orderBy : 'id';
+
+        $orderType = strtoupper($request->getSafe('order_type', 'sanitize_text_field', 'DESC'));
+        $orderType = $orderType === 'ASC' ? 'ASC' : 'DESC';
+
+        $query = Customer::query()->where('by_affiliate_id', $affiliate->id)
+            ->withCount('referrals')
+            ->searchBy($request->getSafe('search', 'sanitize_text_field'))
+            ->orderBy($orderBy, $orderType);
+
+        // Pro lifetime narrows this by lifetime status via the ?filter arg (active/expired).
+        $query = apply_filters('fluent_affiliate/affiliate_customers_query', $query, $request, $affiliate->id);
+
+        $customers = $query->paginate($request->getSafe('per_page', 'intval', 10));
+
+        $response = [
+            'customers' => $customers
+        ];
+
+        // Pro lifetime appends group-aware `lifetime_expiry_days` for the expiry display.
+        return apply_filters('fluent_affiliate/affiliate_customers_response', $response, $affiliate, $request);
     }
 
     public function getTransactions(Request $request, $affiliateId)

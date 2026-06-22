@@ -71,8 +71,17 @@ class CustomerPortal
         // Register and enqueue the loading animation styles
         add_action('wp_enqueue_scripts', [$this, 'enqueueLoadingStyles']);
 
+        $avatarImg = '';
+        if ($isModern) {
+            $user = $affiliate->user;
+            $avatarUrl = $user ? $user->photo : '';
+            if ($avatarUrl) {
+                $avatarImg = '<img id="fa-portal-avatar-src" src="' . esc_url($avatarUrl) . '" alt="" style="position:absolute;left:-9999px;width:1px;height:1px;" aria-hidden="true" />';
+            }
+        }
+
         // Return the markup
-        $markup = '
+        $markup = $avatarImg . '
             <div id="fa-customer-portal">
                   <div class="fa-loading-wrapper">
                     <div class="fa-loading">
@@ -164,7 +173,7 @@ class CustomerPortal
             ],
             'additional_sites' => apply_filters('fluent_affiliate/portal/additional_sites', []),
             'i18n'             => TransStrings::getPortalStrings(),
-            'user'             => $affiliate->user_details,
+            'user'             => array_merge($affiliate->user_details, ['avatar' => '']),
             'branded_coupons'  => $formattedCoupons,
             'currency'         => $this->getCurrency(),
             'is_modern'        => $isModern,

@@ -78,18 +78,21 @@ class Bootstrap extends BaseConnector
 
     protected function addPaymentReferral($submissionId, $submission, $form, $type = 'payment')
     {
-        $affiliate = $this->getCurrentAffiliate();
-
-        if (!$affiliate) {
-            return;
-        }
-
         if ($this->getExistingReferral($submissionId)) {
             return; // Referral already exists
         }
 
         $formattedData = $this->getFormattedPaymentData($submissionId, $submission, $form);
         $customerData = Arr::get($formattedData, 'customer', []);
+
+        $affiliate = $this->getCurrentAffiliate([
+            'user_id' => Arr::get($customerData, 'user_id'),
+            'email'   => Arr::get($customerData, 'email'),
+        ]);
+
+        if (!$affiliate) {
+            return;
+        }
 
         if ($this->isSelfReferred($affiliate, $customerData)) {
             return; // Do not create referral for self-referrals

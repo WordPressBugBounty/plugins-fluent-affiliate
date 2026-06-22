@@ -176,7 +176,6 @@ class Bootstrap extends BaseConnector
         ];
 
         $referral = $this->recordReferral($referralData);
-
         if (!$referral) {
             return;
         }
@@ -223,8 +222,15 @@ class Bootstrap extends BaseConnector
 
     private function getAffiliateByNewOrder(Order $order)
     {
+        $customer = $order->customer;
+
+        $customerIdentity = [
+            'user_id' => $customer ? $customer->user_id : null,
+            'email'   => $customer ? $customer->email : '',
+        ];
+
         if (!$order->coupon_discount_total) {
-            return $this->getCurrentAffiliate();
+            return $this->getCurrentAffiliate($customerIdentity);
         }
 
         foreach ($order->usedCoupons as $coupon) {
@@ -237,24 +243,45 @@ class Bootstrap extends BaseConnector
             }
         }
 
-        return $this->getCurrentAffiliate();
+        return $this->getCurrentAffiliate($customerIdentity);
     }
 
     protected function getFormattedOrderData(Order $order)
     {
-        $formattedItems = [];
+        $itemsByProduct = [];
         foreach ($order->order_items as $item) {
             if (!$item->post_id) {
                 continue;
             }
 
+            $productId = $item->post_id;
+
+            if (!isset($itemsByProduct[$productId])) {
+                $itemsByProduct[$productId] = [
+                    'item_id'  => $productId,
+                    'title'    => $item->post_title,
+                    'subtotal' => 0,
+                    'tax'      => 0,
+                    'discount' => 0,
+                    'total'    => 0,
+                ];
+            }
+
+            $itemsByProduct[$productId]['subtotal'] += $item->subtotal;
+            $itemsByProduct[$productId]['tax']      += $item->tax_amount;
+            $itemsByProduct[$productId]['discount'] += $item->discount_total;
+            $itemsByProduct[$productId]['total']    += $item->line_total;
+        }
+
+        $formattedItems = [];
+        foreach ($itemsByProduct as $product) {
             $formattedItems[] = [
-                'item_id'  => $item->post_id,
-                'title'    => $item->post_title,
-                'subtotal' => $this->centsToDecimal($item->subtotal, $order->currency),
-                'tax'      => $this->centsToDecimal($item->tax_amount, $order->currency),
-                'discount' => $this->centsToDecimal($item->discount_total, $order->currency),
-                'total'    => $this->centsToDecimal($item->line_total, $order->currency)
+                'item_id'  => $product['item_id'],
+                'title'    => $product['title'],
+                'subtotal' => $this->centsToDecimal($product['subtotal'], $order->currency),
+                'tax'      => $this->centsToDecimal($product['tax'], $order->currency),
+                'discount' => $this->centsToDecimal($product['discount'], $order->currency),
+                'total'    => $this->centsToDecimal($product['total'], $order->currency)
             ];
         }
 

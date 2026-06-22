@@ -19,7 +19,7 @@ class IntegrationController extends Controller
 
     public function getConfig(Request $request)
     {
-        $integration = $request->get('integration');
+        $integration = $request->getSafe('integration', 'sanitize_text_field');
 
         $data = apply_filters('fluent_affiliate/get_integration_config_' . $integration, [
             'config' => [],
@@ -38,7 +38,7 @@ class IntegrationController extends Controller
 
     public function saveConfig(Request $request)
     {
-        $integration = $request->get('integration');
+        $integration = $request->getSafe('integration', 'sanitize_text_field');
         $config = $request->get('config', []);
         $message = apply_filters('fluent_affiliate/save_integration_config_' . $integration, '', $config);
 

@@ -2,9 +2,9 @@
 Contributors: techjewel, wpmanageninja
 Tags: affiliate program, affiliate management, affiliate marketing, wp affiliate
 Requires at least: 6.0
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.4.0
+Stable tag: 1.5.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -212,6 +212,21 @@ No, FluentAffiliate works perfectly on its own; you don't need any other Fluent 
 8. Affiliate Payout
 
 == Changelog ==
+
+= 1.5.0 - Jun 22, 2026 =
+- Introduced: Lifetime Commissions
+- Added: Ultimate Affiliate Data Migration
+- Improved: Migration Performance and Memory Use on Large Datasets
+- Improved: Affiliate Portal Sidebar and Body Equal Height
+- Security: Hardened Input Sanitization and v-html XSS Sinks in Admin and Portal
+- Security: Fixed CSRF on Manual Update-Check Trigger
+- Fixed: Doubled FluentCart Commission on Setup Fee
+- Fixed: Self-Referral Not Blocked When Disabled
+- Fixed: Duplicate Customers and Payouts on Migration Re-Run
+- Fixed: Earnings Recount and Payout Totals During Migration
+- Fixed: Null Check After Referral Recording in Integrations
+- Fixed: Dark Mode Background Leaking to All Admin Pages
+- Fixed: FluentCRM Manage Button URL in Features & Addons
 
 = 1.4.0 - Apr 10, 2026 =
 - Introduced: SliceWP Migration

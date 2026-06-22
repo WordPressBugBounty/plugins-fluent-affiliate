@@ -48,10 +48,10 @@ class AffiliateManagerMigrator extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_affiliates', 0);
+        $lastId = (int) Arr::get($status, 'migrated_affiliates', 0);
         $affiliates = $this->db()->table('wpam_affiliates')
+            ->where('affiliateId', '>', $lastId)
             ->orderBy('affiliateId', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get();
 
@@ -117,14 +117,14 @@ class AffiliateManagerMigrator extends BaseMigrator
             ];
 
             $dataToInsert[] = $data;
-            $migratedCount++;
+            $lastId = $affiliate->affiliateId;
         }
 
         // Insert batch
         $this->db()->table('fa_affiliates')->insert($dataToInsert);
 
         // Update status
-        $status['migrated_affiliates'] = $migratedCount;
+        $status['migrated_affiliates'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         // Check time limit
@@ -150,13 +150,13 @@ class AffiliateManagerMigrator extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_referrals', 0);
+        $lastId = (int) Arr::get($status, 'migrated_referrals', 0);
 
 
         $referrals = $this->db()->table('wpam_transactions')
             ->whereIn('type', ['credit', 'refund', 'adjustment']) // CRITICAL: Include adjustment
+            ->where('transactionId', '>', $lastId)
             ->orderBy('transactionId', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get();
 
@@ -205,14 +205,14 @@ class AffiliateManagerMigrator extends BaseMigrator
             ];
 
             $dataToInsert[] = $data;
-            $migratedCount++;
+            $lastId = $referral->transactionId;
         }
 
         // Insert batch
         $this->db()->table('fa_referrals')->insert($dataToInsert);
 
         // Update status
-        $status['migrated_referrals'] = $migratedCount;
+        $status['migrated_referrals'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         // Check time limit
@@ -338,14 +338,14 @@ class AffiliateManagerMigrator extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_payout_id', 0);
+        $lastId = (int) Arr::get($status, 'migrated_payout_id', 0);
 
 
         $transactions = $this->db()->table('wpam_transactions')
             ->where('type', 'payout')
+            ->where('transactionId', '>', $lastId)
             ->selectRaw('*, ABS(amount) as amount') // Make amount positive
             ->orderBy('transactionId', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get();
 
@@ -401,11 +401,11 @@ class AffiliateManagerMigrator extends BaseMigrator
 
             $this->db()->table('fa_payout_transactions')->insert($transactionData);
 
-            $migratedCount++;
+            $lastId = $transaction->transactionId;
         }
 
         // Update status
-        $status['migrated_payout_id'] = $migratedCount;
+        $status['migrated_payout_id'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         // Check time limit
@@ -431,18 +431,16 @@ class AffiliateManagerMigrator extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_visits', 0);
+        $lastId = (int) Arr::get($status, 'migrated_visits', 0);
 
         $visits = $this->db()->table('wpam_tracking_tokens')
+            ->where('trackingTokenId', '>', $lastId)
             ->orderBy('trackingTokenId', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get();
 
         // If empty, trigger post-migration tasks
         if ($visits->isEmpty()) {
-            $status['current_stage'] = 'creatives';
-
             $status = $this->linkCustomersToReferrals($status);
 
             // Check time limit after customer linking
@@ -467,7 +465,11 @@ class AffiliateManagerMigrator extends BaseMigrator
                 return $status;
             }
 
-            $status = $this->recountEarnings($status);
+            // Stay in the 'visits' stage until the paginated recount fully completes;
+            // advancing early would leave affiliates past the recount cursor at zero earnings.
+            if ($this->recountEarnings()) {
+                $status['current_stage'] = 'creatives';
+            }
 
             $this->updateCurrentStatus($status, false);
             return $status;
@@ -494,14 +496,14 @@ class AffiliateManagerMigrator extends BaseMigrator
             ];
 
             $dataToInsert[] = $data;
-            $migratedCount++;
+            $lastId = $visit->trackingTokenId;
         }
 
         // Insert batch
         $this->db()->table('fa_visits')->insert($dataToInsert);
 
         // Update status
-        $status['migrated_visits'] = $migratedCount;
+        $status['migrated_visits'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         // Check time limit
@@ -723,20 +725,39 @@ class AffiliateManagerMigrator extends BaseMigrator
     }
 
     /**
-     * Recount earnings for all affiliates
+     * Recount affiliate earnings in paginated batches so very large affiliate
+     * counts cannot exceed the request time limit and stall the migration.
+     * Returns true when every affiliate has been recounted, false when it
+     * stopped early on the time limit (the caller must re-invoke to resume).
      *
-     * @param array $status
-     * @return array
+     * @return bool
      */
-    protected function recountEarnings($status)
+    protected function recountEarnings()
     {
-        $affiliates = Affiliate::query()->get();
+        $lastId = (int) fluentAffiliate_get_option('wpam_migrated_recount', 0);
+
+        $affiliates = Affiliate::where('id', '>', $lastId)
+            ->orderBy('id', 'ASC')
+            ->limit(100)
+            ->get()
+        ;
+
+        if ($affiliates->isEmpty()) {
+            fluentAffiliate_update_option('wpam_migrated_recount', 0);
+            return true;
+        }
 
         foreach ($affiliates as $affiliate) {
             $affiliate->recountEarnings();
+            $lastId = $affiliate->id;
         }
 
-        $status['affiliates_recounted'] = $affiliates->count();
-        return $status;
+        fluentAffiliate_update_option('wpam_migrated_recount', $lastId);
+
+        if ($this->isTimeLimitExceeded()) {
+            return false;
+        }
+
+        return $this->recountEarnings();
     }
 }

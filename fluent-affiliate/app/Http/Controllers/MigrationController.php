@@ -16,6 +16,7 @@ use FluentAffiliate\App\Services\Migrator\Providers\AffiliateWP;
 use FluentAffiliate\App\Services\Migrator\Providers\AffiliateManagerMigrator;
 use FluentAffiliate\App\Services\Migrator\Providers\SolidAffiliate;
 use FluentAffiliate\App\Services\Migrator\Providers\SliceWP;
+use FluentAffiliate\App\Services\Migrator\Providers\UltimateAffiliate;
 use FluentAffiliate\Framework\Http\Request\Request;
 use FluentAffiliate\Framework\Support\Arr;
 
@@ -53,6 +54,13 @@ class MigrationController extends Controller
             $migrators[] = [
                 'name' => 'SliceWP',
                 'slug' => 'slicewp',
+            ];
+        }
+
+        if (defined('UAP_PLUGIN_VER')) {
+            $migrators[] = [
+                'name' => 'Ultimate Affiliate',
+                'slug' => 'ultimate_affiliate',
             ];
         }
 
@@ -164,7 +172,7 @@ class MigrationController extends Controller
 
         if (!in_array($currentStep, $validStages)) {
             return $this->sendError([
-                'message' => 'Invalid stage. Please start the migration again.'
+                'message' => __('Invalid stage. Please start the migration again.', 'fluent-affiliate')
             ]);
         }
 
@@ -237,6 +245,13 @@ class MigrationController extends Controller
         delete_option('_fla_wpam_migrations_status');
         delete_option('_fla_solid_affiliate_migrations_status');
         delete_option('_fla_slicewp_migrations_status');
+        delete_option('_fla_ultimate_affiliate_migrations_status');
+
+        fluentAffiliate_update_option('affwp_migrated_recount', 0);
+        fluentAffiliate_update_option('solid_affiliate_migrated_recount', 0);
+        fluentAffiliate_update_option('wpam_migrated_recount', 0);
+        fluentAffiliate_update_option('slicewp_migrated_recount', 0);
+        fluentAffiliate_update_option('ultimate_affiliate_migrated_recount', 0);
 
         do_action('fluent_affiliate/wipe_current_data');
 
@@ -256,6 +271,7 @@ class MigrationController extends Controller
             'affiliate_manager' => AffiliateManagerMigrator::class,
             'solid_affiliate' => SolidAffiliate::class,
             'slicewp'          => SliceWP::class,
+            'ultimate_affiliate' => UltimateAffiliate::class,
         ];
 
         if (!isset($migratorClasses[$migrator])) {

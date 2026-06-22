@@ -248,7 +248,7 @@ class AffiliateManagerMigrationCLI
         $this->logInfo('');
         $this->logInfo('Migrating affiliates...');
 
-        $migratedCount = fluentAffiliate_get_option('affiliate_manager_migrated_affiliates', 0);
+        $lastId = (int) fluentAffiliate_get_option('affiliate_manager_migrated_affiliates', 0);
 
         $affiliateStatusMap = [
             'applied'   => 'pending',
@@ -271,13 +271,13 @@ class AffiliateManagerMigrationCLI
                 'dateCreated',
                 'uniqueRefKey'  // FIX #2: Add tracking key to SELECT
             ])
+            ->where('affiliateId', '>', $lastId)
             ->orderBy('affiliateId', 'ASC')
-            ->offset($migratedCount)
             ->limit($this->batchSize)
             ->get();
 
         if ($affiliates->isEmpty()) {
-            $this->logSuccess(sprintf('Total %d affiliates migrated', $migratedCount));
+            $this->logSuccess(sprintf('Total affiliates migrated (up to #%d)', $lastId));
             return;
         }
 
@@ -285,6 +285,8 @@ class AffiliateManagerMigrationCLI
         $usersCreated = 0;
 
         foreach ($affiliates as $affiliate) {
+            $lastId = $affiliate->affiliateId;
+
             // FIX #3: User creation logic - check for existing user by email first
             if (empty($affiliate->userId)) {
                 $existingUser = get_user_by('email', $affiliate->email);
@@ -331,13 +333,12 @@ class AffiliateManagerMigrationCLI
             ];
 
             $dataToInsert[] = $data;
-            $migratedCount++;
         }
 
         try {
             $this->db->table('fa_affiliates')->insert($dataToInsert);
-            fluentAffiliate_update_option('affiliate_manager_migrated_affiliates', $migratedCount);
-            $this->logInfo(sprintf('Migrated %d affiliates (created %d new users)...', $migratedCount, $usersCreated));
+            fluentAffiliate_update_option('affiliate_manager_migrated_affiliates', $lastId);
+            $this->logInfo(sprintf('Migrated affiliates up to #%d (created %d new users)...', $lastId, $usersCreated));
         } catch (\Exception $e) {
             $this->logError('Error migrating affiliates: ' . $e->getMessage());
             return;
@@ -357,7 +358,7 @@ class AffiliateManagerMigrationCLI
         $this->logInfo('');
         $this->logInfo('Migrating referrals...');
 
-        $migratedCount = fluentAffiliate_get_option('affiliate_manager_migrated_referrals', 0);
+        $lastId = (int) fluentAffiliate_get_option('affiliate_manager_migrated_referrals', 0);
 
         $referralStatusMap = [
             'pending'   => 'unpaid',
@@ -369,13 +370,13 @@ class AffiliateManagerMigrationCLI
         // FIX #4: Add 'adjustment' to transaction types
         $referrals = $this->db->table('wpam_transactions')
             ->whereIn('type', ['credit', 'refund', 'adjustment'])
+            ->where('transactionId', '>', $lastId)
             ->orderBy('transactionId', 'ASC')
-            ->offset($migratedCount)
             ->limit($this->batchSize)
             ->get();
 
         if ($referrals->isEmpty()) {
-            $this->logSuccess(sprintf('Total %d referrals migrated', $migratedCount));
+            $this->logSuccess(sprintf('Total referrals migrated (up to #%d)', $lastId));
             return;
         }
 
@@ -408,13 +409,13 @@ class AffiliateManagerMigrationCLI
             ];
 
             $dataToInsert[] = $data;
-            $migratedCount++;
+            $lastId = $referral->transactionId;
         }
 
         try {
             $this->db->table('fa_referrals')->insert($dataToInsert);
-            fluentAffiliate_update_option('affiliate_manager_migrated_referrals', $migratedCount);
-            $this->logInfo(sprintf('Migrated %d referrals...', $migratedCount));
+            fluentAffiliate_update_option('affiliate_manager_migrated_referrals', $lastId);
+            $this->logInfo(sprintf('Migrated referrals up to #%d...', $lastId));
         } catch (\Exception $e) {
             $this->logError('Error migrating referrals: ' . $e->getMessage());
             return;
@@ -540,18 +541,18 @@ class AffiliateManagerMigrationCLI
         $this->logInfo('');
         $this->logInfo('Migrating payouts...');
 
-        $migratedCount = fluentAffiliate_get_option('affiliate_manager_migrated_payouts', 0);
+        $lastId = (int) fluentAffiliate_get_option('affiliate_manager_migrated_payouts', 0);
 
         $transactions = $this->db->table('wpam_transactions')
             ->where('type', 'payout')
+            ->where('transactionId', '>', $lastId)
             ->selectRaw('transactionId, dateCreated, dateModified, affiliateId, ABS(amount) as amount')
             ->orderBy('transactionId', 'ASC')
-            ->offset($migratedCount)
             ->limit($this->batchSize)
             ->get();
 
         if ($transactions->isEmpty()) {
-            $this->logSuccess(sprintf('Total %d payouts migrated', $migratedCount));
+            $this->logSuccess(sprintf('Total payouts migrated (up to #%d)', $lastId));
             return;
         }
 
@@ -589,7 +590,7 @@ class AffiliateManagerMigrationCLI
             ];
 
             $affiliatePayouts[$affiliateId]['transactions'][] = $transactionData;
-            $migratedCount++;
+            $lastId = $transaction->transactionId;
         }
 
         $payouts = array_values($affiliatePayouts);
@@ -622,8 +623,8 @@ class AffiliateManagerMigrationCLI
             }
         }
 
-        fluentAffiliate_update_option('affiliate_manager_migrated_payouts', $migratedCount);
-        $this->logInfo(sprintf('Migrated %d payout transactions...', $migratedCount));
+        fluentAffiliate_update_option('affiliate_manager_migrated_payouts', $lastId);
+        $this->logInfo(sprintf('Migrated payout transactions up to #%d...', $lastId));
 
         // Continue recursively
         $this->migratePayouts();
@@ -639,16 +640,16 @@ class AffiliateManagerMigrationCLI
         $this->logInfo('');
         $this->logInfo('Migrating visits...');
 
-        $migratedCount = fluentAffiliate_get_option('affiliate_manager_migrated_visits', 0);
+        $lastId = (int) fluentAffiliate_get_option('affiliate_manager_migrated_visits', 0);
 
         $visits = $this->db->table('wpam_tracking_tokens')
+            ->where('trackingTokenId', '>', $lastId)
             ->orderBy('trackingTokenId', 'ASC')
-            ->offset($migratedCount)
             ->limit($this->batchSize)
             ->get();
 
         if ($visits->isEmpty()) {
-            $this->logSuccess(sprintf('Total %d visits migrated', $migratedCount));
+            $this->logSuccess(sprintf('Total visits migrated (up to #%d)', $lastId));
             return;
         }
 
@@ -670,13 +671,13 @@ class AffiliateManagerMigrationCLI
             ];
 
             $dataToInsert[] = $data;
-            $migratedCount++;
+            $lastId = $visit->trackingTokenId;
         }
 
         try {
             $this->db->table('fa_visits')->insert($dataToInsert);
-            fluentAffiliate_update_option('affiliate_manager_migrated_visits', $migratedCount);
-            $this->logInfo(sprintf('Migrated %d visits...', $migratedCount));
+            fluentAffiliate_update_option('affiliate_manager_migrated_visits', $lastId);
+            $this->logInfo(sprintf('Migrated visits up to #%d...', $lastId));
         } catch (\Exception $e) {
             $this->logError('Error migrating visits: ' . $e->getMessage());
             return;

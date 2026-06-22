@@ -494,7 +494,8 @@ class FluentFormAffiliateRegistration extends IntegrationManagerController
                 if (!empty(Arr::get($primaryField, 'required'))) {
                     $fieldKey = Arr::get($primaryField, 'key');
                     if (empty(Arr::get($settings, $fieldKey))) {
-                        $errors[$fieldKey] = Arr::get($primaryField, 'label') . ' is required.';
+                        /* translators: %s is the field label */
+                        $errors[$fieldKey] = sprintf(__('%s is required.', 'fluent-affiliate'), Arr::get($primaryField, 'label'));
                     }
                 }
             }

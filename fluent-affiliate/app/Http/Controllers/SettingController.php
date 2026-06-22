@@ -243,8 +243,8 @@ class SettingController extends Controller
 
     public function createPage(Request $request)
     {
-        $title = $request->getSafe('title');
-        $content = $request->getSafe('content');
+        $title = $request->getSafe('title', 'sanitize_text_field');
+        $content = $request->getSafe('content', 'wp_kses_post');
 
         $page = get_page_by_path($title);
 
@@ -275,7 +275,7 @@ class SettingController extends Controller
 
     public function getPagesOptions(Request $request)
     {
-        $search = $request->getSafe('search');
+        $search = $request->getSafe('search', 'sanitize_text_field');
 
         $db = Utility::getApp('db');
 
@@ -306,9 +306,9 @@ class SettingController extends Controller
 
     public function getAffiliatesOptions(Request $request)
     {
-        $search = $request->getSafe('search');
+        $search = $request->getSafe('search', 'sanitize_text_field');
 
-        $includedIds = (array)$request->get('include_ids', []);
+        $includedIds = array_map('intval', (array)$request->get('include_ids', []));
 
         $formattedAffiliates = AffiliateService::getAffiliatesOptions($search, $includedIds);
 
@@ -319,7 +319,7 @@ class SettingController extends Controller
 
     public function getUsersOptions(Request $request)
     {
-        $search = $request->getSafe('search');
+        $search = $request->getSafe('search', 'sanitize_text_field');
         $userQuery = User::query();
 
         if ($request->get('exclude_affiliates', false)) {
@@ -331,7 +331,7 @@ class SettingController extends Controller
             ->limit(20)
             ->get();
 
-        $includedIds = $request->get('include_ids', []);
+        $includedIds = array_map('intval', (array)$request->get('include_ids', []));
 
         if ($includedIds) {
             $pushedIds = $users->pluck('ID')->toArray();

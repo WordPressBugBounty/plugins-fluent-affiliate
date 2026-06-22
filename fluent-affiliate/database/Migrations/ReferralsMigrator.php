@@ -16,6 +16,18 @@ class ReferralsMigrator
 
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) === $table) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+            $indexExists = $wpdb->get_results($wpdb->prepare(
+                "SHOW INDEX FROM `$table` WHERE Key_name = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name cannot be prepared
+                'fa_ref_customer'
+            ));
+
+            if (empty($indexExists)) {
+                $safeTable = esc_sql($table);
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                $wpdb->query("ALTER TABLE `{$safeTable}` ADD INDEX `fa_ref_customer` (`customer_id`);");
+            }
+
             return;
         }
 
@@ -45,7 +57,8 @@ class ReferralsMigrator
                  INDEX `fa_aff_status_idx` (`status`),
                  INDEX `fa_aff_type` (`type` ),
                  INDEX `fa_aff_provider` (`provider` ),
-                 INDEX `fa_aff_provider_sub` (`provider_sub_id` )
+                 INDEX `fa_aff_provider_sub` (`provider_sub_id` ),
+                 INDEX `fa_ref_customer` (`customer_id`)
             ) $charsetCollate;";
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
         dbDelta($sql);

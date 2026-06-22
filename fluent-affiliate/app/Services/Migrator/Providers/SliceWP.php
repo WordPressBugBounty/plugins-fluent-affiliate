@@ -21,14 +21,14 @@ class SliceWP extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_affiliate_groups', 0);
+        $lastId = (int) Arr::get($status, 'migrated_affiliate_groups', 0);
         $db = $this->db();
 
         $groups = $db->table('slicewp_collections')
             ->where('object_context', 'affiliate')
             ->where('type', 'group')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -65,7 +65,7 @@ class SliceWP extends BaseMigrator
         ;
 
         foreach ($groups as $group) {
-            $migratedCount++;
+            $lastId = $group->id;
 
             if (in_array($group->name, $existingNames)) {
                 continue;
@@ -91,7 +91,7 @@ class SliceWP extends BaseMigrator
             }
         }
 
-        $status['migrated_affiliate_groups'] = $migratedCount;
+        $status['migrated_affiliate_groups'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -107,7 +107,7 @@ class SliceWP extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_affiliates', 0);
+        $lastId = (int) Arr::get($status, 'migrated_affiliates', 0);
 
         $affiliateStatusMap = [
             'active'   => 'active',
@@ -125,8 +125,8 @@ class SliceWP extends BaseMigrator
         $db = $this->db();
 
         $affiliates = $db->table('slicewp_affiliates')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -180,7 +180,7 @@ class SliceWP extends BaseMigrator
 
         foreach ($affiliates as $affiliate) {
             $affId = $affiliate->id;
-            $migratedCount++;
+            $lastId = $affId;
 
             if (isset($existingIds[$affId])) {
                 continue;
@@ -228,7 +228,7 @@ class SliceWP extends BaseMigrator
             // Skip this batch to avoid blocking the rest of the migration
         }
 
-        $status['migrated_affiliates'] = $migratedCount;
+        $status['migrated_affiliates'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -244,7 +244,7 @@ class SliceWP extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_referrals', 0);
+        $lastId = (int) Arr::get($status, 'migrated_referrals', 0);
 
         // SliceWP commission statuses: paid, unpaid, pending, rejected
         // FA referral statuses: paid, unpaid, pending, rejected, cancelled
@@ -258,8 +258,8 @@ class SliceWP extends BaseMigrator
         $db = $this->db();
 
         $commissions = $db->table('slicewp_commissions')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -280,7 +280,7 @@ class SliceWP extends BaseMigrator
         $dataToInsert = [];
 
         foreach ($commissions as $commission) {
-            $migratedCount++;
+            $lastId = $commission->id;
 
             if (isset($existingIds[$commission->id])) {
                 continue;
@@ -314,7 +314,7 @@ class SliceWP extends BaseMigrator
             // Skip this batch to avoid blocking the rest of the migration
         }
 
-        $status['migrated_referrals'] = $migratedCount;
+        $status['migrated_referrals'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -330,12 +330,12 @@ class SliceWP extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_customers', 0);
+        $lastId = (int) Arr::get($status, 'migrated_customers', 0);
         $db = $this->db();
 
         $customers = $db->table('slicewp_customers')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -356,7 +356,7 @@ class SliceWP extends BaseMigrator
         $dataToInsert = [];
 
         foreach ($customers as $customer) {
-            $migratedCount++;
+            $lastId = $customer->id;
 
             if (isset($existingIds[$customer->id])) {
                 continue;
@@ -382,7 +382,7 @@ class SliceWP extends BaseMigrator
             // Skip this batch to avoid blocking the rest of the migration
         }
 
-        $status['migrated_customers'] = $migratedCount;
+        $status['migrated_customers'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -398,7 +398,7 @@ class SliceWP extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_payout_id', 0);
+        $lastId = (int) Arr::get($status, 'migrated_payout_id', 0);
 
         $payoutMethodMap = [
             'manual' => 'manual',
@@ -417,8 +417,8 @@ class SliceWP extends BaseMigrator
         $db = $this->db();
 
         $payouts = $db->table('slicewp_payouts')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -442,7 +442,7 @@ class SliceWP extends BaseMigrator
         }
 
         foreach ($payouts as $payout) {
-            $migratedCount++;
+            $lastId = $payout->id;
 
             $payments = $paymentsByPayout[$payout->id] ?? [];
 
@@ -502,7 +502,7 @@ class SliceWP extends BaseMigrator
             }
         }
 
-        $status['migrated_payout_id'] = $migratedCount;
+        $status['migrated_payout_id'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -518,21 +518,26 @@ class SliceWP extends BaseMigrator
             $status = $this->getCurrentStatus();
         }
 
-        $migratedCount = Arr::get($status, 'migrated_visits', 0);
+        $lastId = (int) Arr::get($status, 'migrated_visits', 0);
 
         $db = $this->db();
 
         $visits = $db->table('slicewp_visits')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
 
         if ($visits->isEmpty()) {
             $this->resetAutoIncrement('fa_visits');
-            $status['current_stage'] = 'creatives';
-            $this->recountAffiliateEarnings();
+
+            // Stay in the 'visits' stage until the paginated recount fully completes;
+            // advancing early would leave affiliates past the recount cursor at zero earnings.
+            if ($this->recountAffiliateEarnings()) {
+                $status['current_stage'] = 'creatives';
+            }
+
             $this->updateCurrentStatus($status, false);
             return $status;
         }
@@ -546,7 +551,7 @@ class SliceWP extends BaseMigrator
         $dataToInsert = [];
 
         foreach ($visits as $visit) {
-            $migratedCount++;
+            $lastId = $visit->id;
 
             if (isset($existingIds[$visit->id])) {
                 continue;
@@ -573,7 +578,7 @@ class SliceWP extends BaseMigrator
             // Skip this batch to avoid blocking the rest of the migration
         }
 
-        $status['migrated_visits'] = $migratedCount;
+        $status['migrated_visits'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -595,12 +600,12 @@ class SliceWP extends BaseMigrator
             return $status;
         }
 
-        $migratedCount = Arr::get($status, 'migrated_creatives', 0);
+        $lastId = (int) Arr::get($status, 'migrated_creatives', 0);
         $db = $this->db();
 
         $creatives = $db->table('slicewp_creatives')
+            ->where('id', '>', $lastId)
             ->orderBy('id', 'ASC')
-            ->offset($migratedCount)
             ->limit($limit)
             ->get()
         ;
@@ -624,7 +629,7 @@ class SliceWP extends BaseMigrator
         $dataToInsert = [];
 
         foreach ($creatives as $creative) {
-            $migratedCount++;
+            $lastId = $creative->id;
 
             if (isset($existingNames[$creative->name])) {
                 continue;
@@ -653,7 +658,7 @@ class SliceWP extends BaseMigrator
             // Skip this batch to avoid blocking the rest of the migration
         }
 
-        $status['migrated_creatives'] = $migratedCount;
+        $status['migrated_creatives'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -753,32 +758,36 @@ class SliceWP extends BaseMigrator
     }
 
     /**
-     * Paginated recount to avoid OOM on large datasets.
+     * Paginated recount to avoid OOM on large datasets. The cursor stores the
+     * last processed affiliate id (not a row offset) so each batch resumes with
+     * an indexed id range instead of an ever-growing SQL OFFSET scan. Returns
+     * true when every affiliate has been recounted, false when it stopped early
+     * on the time limit (the caller must re-invoke to resume).
      */
     private function recountAffiliateEarnings()
     {
-        $recountOffset = (int) fluentAffiliate_get_option('slicewp_migrated_recount', 0);
+        $lastId = (int) fluentAffiliate_get_option('slicewp_migrated_recount', 0);
 
-        $affiliates = Affiliate::orderBy('id', 'ASC')
-            ->offset($recountOffset)
+        $affiliates = Affiliate::where('id', '>', $lastId)
+            ->orderBy('id', 'ASC')
             ->limit(100)
             ->get()
         ;
 
         if ($affiliates->isEmpty()) {
             fluentAffiliate_update_option('slicewp_migrated_recount', 0);
-            return;
+            return true;
         }
 
         foreach ($affiliates as $affiliate) {
             $affiliate->recountEarnings();
-            $recountOffset++;
+            $lastId = $affiliate->id;
         }
 
-        fluentAffiliate_update_option('slicewp_migrated_recount', $recountOffset);
+        fluentAffiliate_update_option('slicewp_migrated_recount', $lastId);
 
         if ($this->isTimeLimitExceeded()) {
-            return;
+            return false;
         }
 
         return $this->recountAffiliateEarnings();
