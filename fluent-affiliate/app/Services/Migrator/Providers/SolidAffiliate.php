@@ -3,6 +3,7 @@
 namespace FluentAffiliate\App\Services\Migrator\Providers;
 
 use FluentAffiliate\App\Models\Affiliate;
+use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Services\Migrator\BaseMigrator;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\App\Models\AffiliateGroup;
@@ -10,6 +11,8 @@ use FluentAffiliate\App\Models\Customer;
 
 class SolidAffiliate extends BaseMigrator
 {
+    private $groupIdMap = null;
+
     public function __construct()
     {
         $this->migratorPrefix = 'solid_affiliate';
@@ -34,7 +37,7 @@ class SolidAffiliate extends BaseMigrator
         $rateTypeMap = [
             'site_default' => 'default',
             'percentage'   => 'percentage',
-            'flat'         => 'fixed',
+            'flat'         => 'flat',
         ];
 
         // Query solid_affiliate_affiliates table
@@ -52,17 +55,32 @@ class SolidAffiliate extends BaseMigrator
             return $status;
         }
 
+        $groupIdMap = $this->getGroupIdMap();
+
         $dataToInsert = [];
 
         foreach ($affiliates as $affiliate) {
             $lastId = $affiliate->id;
 
+            $groupId = isset($groupIdMap[$affiliate->affiliate_group_id]) ? $groupIdMap[$affiliate->affiliate_group_id] : null;
+
+            $rateType = isset($rateTypeMap[$affiliate->commission_type]) ? $rateTypeMap[$affiliate->commission_type] : 'default';
+
+            // Solid resolves a rate through affiliate → group → site, so an affiliate
+            // left on the site default still earns its group's rate. Fluent only reads
+            // the group when the rate type is `group`, so point it there whenever the
+            // affiliate belongs to one. A group that is itself on `default` falls back
+            // to the site rate, which is what Solid does too.
+            if ($rateType == 'default' && $groupId) {
+                $rateType = 'group';
+            }
+
             $data = [
                 'id'              => $affiliate->id,
                 'user_id'         => $affiliate->user_id,
-                'group_id'        => $affiliate->affiliate_group_id ?: null,
+                'group_id'        => $groupId,
                 'rate'            => $affiliate->commission_rate ?: null,
-                'rate_type'       => isset($rateTypeMap[$affiliate->commission_type]) ? $rateTypeMap[$affiliate->commission_type] : 'percentage',
+                'rate_type'       => $rateType,
                 'payment_email'   => $affiliate->payment_email ?: null,
                 'note'            => $affiliate->registration_notes ?: null,
                 'status'          => isset($affiliateStatusMap[$affiliate->status]) ? $affiliateStatusMap[$affiliate->status] : 'active',
@@ -109,11 +127,13 @@ class SolidAffiliate extends BaseMigrator
             'draft'    => 'pending',
         ];
 
-        // SA referral_type → FA type
+        // SA referral_type → FA type. Fluent has no event type, so Solid's event
+        // referrals land as sales, which is what they are paid out as either way.
         $referralTypeMap = [
             'purchase'             => 'sale',
             'subscription_renewal' => 'recurring_sale',
             'auto_referral'        => 'sale',
+            'event'                => 'sale',
         ];
 
         // Query solid_affiliate_referrals table
@@ -129,6 +149,27 @@ class SolidAffiliate extends BaseMigrator
             $this->updateCurrentStatus($status);
             return $status;
         }
+
+        // Parse every commission blob up front so the titles behind them can be
+        // read in one query instead of one per distinct product.
+        $itemCommissions = [];
+        $productIds = [];
+
+        foreach ($referrals as $referral) {
+            $items = $this->parseItemCommissions($referral->serialized_item_commissions);
+
+            $itemCommissions[$referral->id] = $items;
+
+            foreach ($items as $item) {
+                $productId = (int) Arr::get($item, 'product_id');
+
+                if ($productId) {
+                    $productIds[$productId] = $productId;
+                }
+            }
+        }
+
+        $productTitles = $this->getProductTitles($productIds);
 
         $referralToInsert = [];
 
@@ -146,7 +187,7 @@ class SolidAffiliate extends BaseMigrator
                 'currency'      => null,
                 'provider'      => 'woo',
                 'provider_id'   => $referral->order_id ?: null,
-                'products'      => $referral->serialized_item_commissions ?: null,
+                'products'      => $this->formatReferralProducts($itemCommissions[$referral->id], $productTitles),
                 'type'          => isset($referralTypeMap[$referral->referral_type]) ? $referralTypeMap[$referral->referral_type] : 'sale',
                 'status'        => isset($referralStatusMap[$referral->status]) ? $referralStatusMap[$referral->status] : 'pending',
                 'created_at'    => $referral->created_at,
@@ -169,6 +210,99 @@ class SolidAffiliate extends BaseMigrator
         }
 
         return $this->migrateReferrals($status);
+    }
+
+    /**
+     * Solid stores its per-item commission breakdown as serialized ItemCommission
+     * objects, so reading the blob has to drop those classes.
+     *
+     * @param string|null $serializedItemCommissions
+     * @return array Item rows as plain arrays, empty when there is nothing usable.
+     */
+    private function parseItemCommissions($serializedItemCommissions)
+    {
+        if (!$serializedItemCommissions) {
+            return [];
+        }
+
+        // Drops the Solid classes rather than instantiating them, so this leaves
+        // incomplete objects behind and never runs their constructors.
+        $itemCommissions = Utility::safeUnserialize($serializedItemCommissions);
+
+        if (!is_array($itemCommissions)) {
+            return [];
+        }
+
+        // Casting reaches the properties whether an entry unserialized into an
+        // incomplete object or was already an array.
+        return array_map(function ($itemCommission) {
+            return (array) $itemCommission;
+        }, $itemCommissions);
+    }
+
+    /**
+     * @param array $productIds
+     * @return array Product id → title.
+     */
+    private function getProductTitles($productIds)
+    {
+        if (!$productIds) {
+            return [];
+        }
+
+        $posts = $this->db()->table('posts')
+            ->select(['ID', 'post_title'])
+            ->whereIn('ID', array_values($productIds))
+            ->get()
+        ;
+
+        $titles = [];
+
+        foreach ($posts as $post) {
+            $titles[(int) $post->ID] = $post->post_title;
+        }
+
+        return $titles;
+    }
+
+    /**
+     * Copying Solid's blob across leaves it unreadable, because Fluent reads the
+     * column with class loading disabled and gets back __PHP_Incomplete_Class.
+     * Rebuild it as the plain rows the referral view reads.
+     *
+     * @param array $items
+     * @param array $productTitles Product id → title, resolved for the whole batch.
+     * @return string|null Serialized product rows, or null when there is nothing usable.
+     */
+    private function formatReferralProducts($items, $productTitles)
+    {
+        $products = [];
+
+        foreach ($items as $item) {
+            $productId = (int) Arr::get($item, 'product_id');
+            $amount    = (float) Arr::get($item, 'purchase_amount', 0);
+
+            $title = isset($productTitles[$productId]) ? $productTitles[$productId] : '';
+
+            $products[] = [
+                'item_id'  => $productId,
+                // A product deleted since the sale keeps its id as the label.
+                'title'    => $title ?: ($productId ? '#' . $productId : ''),
+                'quantity' => (int) Arr::get($item, 'quantity', 1),
+                'subtotal' => $amount,
+                // Solid tracks tax as an order-level exclusion, not per item.
+                'tax'      => 0,
+                'total'    => $amount,
+            ];
+        }
+
+        if (!$products) {
+            return null;
+        }
+
+        // The referrals batch is written through the query builder rather than the
+        // model, so the serializing mutator on the column never runs.
+        return \maybe_serialize($products);
     }
 
     public function migrateCustomers($status = [], $limit = 100)
@@ -541,7 +675,7 @@ class SolidAffiliate extends BaseMigrator
         $rateTypeMap = [
             'site_default' => 'default',
             'percentage'   => 'percentage',
-            'flat'         => 'fixed',
+            'flat'         => 'flat',
         ];
 
         $dataToInsert = [];
@@ -558,6 +692,7 @@ class SolidAffiliate extends BaseMigrator
                     'notes'     => 'Migrated from Solid Affiliate',
                     'rate_type' => $rateType,
                     'rate'      => $group->commission_rate,
+                    'source_id' => $group->id,
                 ]),
                 'object_type' => 'affiliate_group',
             ];
@@ -579,6 +714,60 @@ class SolidAffiliate extends BaseMigrator
         }
 
         return $this->migrateAffiliateGroups($status);
+    }
+
+    /**
+     * Solid group ids are not preserved on insert, so affiliates have to be
+     * mapped onto the fa_meta ids. Groups migrated by this class carry their
+     * source id, which is exact. Group names are not unique in Solid, so the
+     * name fallback (for groups migrated before source ids were stored) can
+     * only resolve to the last group of that name.
+     *
+     * @return array
+     */
+    private function getGroupIdMap()
+    {
+        if ($this->groupIdMap !== null) {
+            return $this->groupIdMap;
+        }
+
+        $this->groupIdMap = [];
+
+        $solidGroups = $this->db()
+            ->table('solid_affiliate_affiliate_groups')
+            ->select(['id', 'name'])
+            ->get()
+        ;
+
+        if ($solidGroups->isEmpty()) {
+            return $this->groupIdMap;
+        }
+
+        $faGroupsBySourceId = [];
+        $faGroupsByName = [];
+
+        foreach (AffiliateGroup::where('object_type', 'affiliate_group')->get() as $faGroup) {
+            $sourceId = is_array($faGroup->value) ? Arr::get($faGroup->value, 'source_id') : null;
+
+            if ($sourceId) {
+                $faGroupsBySourceId[$sourceId] = $faGroup->id;
+            }
+
+            $faGroupsByName[$faGroup->meta_key] = $faGroup->id;
+        }
+
+        foreach ($solidGroups as $solidGroup) {
+            if (isset($faGroupsBySourceId[$solidGroup->id])) {
+                $this->groupIdMap[$solidGroup->id] = $faGroupsBySourceId[$solidGroup->id];
+                continue;
+            }
+
+            if (isset($faGroupsByName[$solidGroup->name])) {
+                $this->groupIdMap[$solidGroup->id] = $faGroupsByName[$solidGroup->name];
+            }
+        }
+
+        return $this->groupIdMap;
     }
 
     public function migrateVisits($status = [], $limit = 100)
@@ -662,6 +851,7 @@ class SolidAffiliate extends BaseMigrator
             'customers'        => $linksCount + $referralCustomerCount,
             'payouts'          => $db->table('solid_affiliates_bulk_payouts')->count(),
             'visits'           => $db->table('solid_affiliate_visits')->count(),
+            'creatives'        => $db->table('solid_affiliate_creatives')->count(),
         ];
 
         return $data;
@@ -707,9 +897,88 @@ class SolidAffiliate extends BaseMigrator
 
     public function migrateCreatives($status = [], $limit = 100)
     {
-        // Solid Affiliate has no creatives to migrate
-        $status['current_stage'] = 'completed';
+        if (!$status) {
+            $status = $this->getCurrentStatus();
+        }
+
+        // fa_creatives ships with the Pro plugin, so there is nowhere to put
+        // them when only the free plugin is installed.
+        if (!$this->hasTable('fa_creatives')) {
+            $status['current_stage'] = 'completed';
+            $this->updateCurrentStatus($status, false);
+            return $status;
+        }
+
+        $lastId = (int) Arr::get($status, 'migrated_creatives', 0);
+        $db = $this->db();
+
+        $creatives = $db->table('solid_affiliate_creatives')
+            ->where('id', '>', $lastId)
+            ->orderBy('id', 'ASC')
+            ->limit($limit)
+            ->get()
+        ;
+
+        if ($creatives->isEmpty()) {
+            $status['current_stage'] = 'completed';
+            $this->updateCurrentStatus($status, false);
+            return $status;
+        }
+
+        $existingNames = array_flip($db->table('fa_creatives')
+            ->whereIn('name', $creatives->pluck('name')->toArray())
+            ->pluck('name')
+            ->toArray()
+        );
+
+        $dataToInsert = [];
+
+        foreach ($creatives as $creative) {
+            $lastId = $creative->id;
+
+            if (isset($existingNames[$creative->name])) {
+                continue;
+            }
+
+            $dataToInsert[] = [
+                'name'        => $creative->name,
+                'description' => $creative->description ?: null,
+                // Solid has no type column, so the banner image decides between
+                // FA's image and text creatives.
+                'type'        => $creative->creative_image_url ? 'image' : 'text',
+                'image'       => $creative->creative_image_url ?: null,
+                'text'        => $creative->creative_text ?: null,
+                'url'         => $creative->url ?: null,
+                'privacy'     => 'public',
+                'status'      => ($creative->status === 'inactive') ? 'inactive' : 'active',
+                'created_at'  => $creative->created_at,
+                'updated_at'  => $creative->updated_at,
+            ];
+        }
+
+        try {
+            if (!empty($dataToInsert)) {
+                $db->table('fa_creatives')->insert($dataToInsert);
+            }
+        } catch (\Exception $e) {
+            // Skip this batch to avoid blocking the rest of the migration
+        }
+
+        $status['migrated_creatives'] = $lastId;
         $this->updateCurrentStatus($status, false);
-        return $status;
+
+        if ($this->isTimeLimitExceeded()) {
+            return $status;
+        }
+
+        return $this->migrateCreatives($status);
+    }
+
+    private function hasTable($tableName)
+    {
+        $wpdb = $GLOBALS['wpdb'];
+        $fullName = $wpdb->prefix . $tableName;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema check; result not worth caching
+        return (bool) $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->esc_like($fullName)));
     }
 }

@@ -33,7 +33,7 @@ class FormBuilder
         $helpText = $field['help_text'] ?? '';
 
         $atts = array_filter([
-            'type'        => in_array($type, ['text', 'email', 'password', 'url']) ? $type : '',
+            'type'        => in_array($type, ['text', 'email', 'password', 'url', 'number', 'date']) ? $type : '',
             'id'          => 'fa_' . $name,
             'name'        => $name,
             'value'       => $value,
@@ -43,9 +43,11 @@ class FormBuilder
             'class'       => $field['input_class'] ?? '',
         ]);
 
+        $labelId = 'fa_label_' . $name;
+
         echo "<div id='fa_group_" . esc_attr($name) . "' class='fa_form-group'>";
         if ($label):
-            echo "<div class='fa_form_label'><label for='" . esc_attr($atts['id']) . "'>" . esc_html($label) . "</label></div>";
+            echo "<div class='fa_form_label'><label id='" . esc_attr($labelId) . "' for='" . esc_attr($atts['id']) . "'>" . esc_html($label) . "</label></div>";
         endif;
 
         echo "<div class='fa_form_input'>";
@@ -54,11 +56,35 @@ class FormBuilder
             // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- printAtts() method escapes all attributes
             echo "<input " . $this->printAtts($atts) . ">";
         } elseif ($type === 'select') {
-            echo "<select id='" . esc_attr($name) . "' name='" . esc_attr($name) . "' " . ($required ? 'required' : '') . ">";
+            echo "<select id='" . esc_attr($atts['id']) . "' name='" . esc_attr($name) . "' " . ($required ? 'required' : '') . ">";
+            // Fixed unselected prompt (disabled + selected), matches FluentBooking's dropdown. No editable placeholder.
+            $placeholder = $field['placeholder'] ?? '';
+            $prompt = $placeholder !== '' ? $placeholder : __('Select', 'fluent-affiliate');
+            echo "<option value='' disabled selected>" . esc_html($prompt) . "</option>";
             foreach ($options as $option) {
                 echo "<option value='".esc_attr($option)."'>".esc_html($option)."</option>";
             }
             echo "</select>";
+        } elseif ($type === 'radio') {
+            echo "<div class='fa_radio_group' role='radiogroup' aria-labelledby='" . esc_attr($labelId) . "'>";
+            foreach ($options as $option) {
+                $optId = 'fa_' . $name . '_' . sanitize_title($option);
+                echo "<label class='fa_radio_option' for='" . esc_attr($optId) . "'>";
+                echo "<input type='radio' id='" . esc_attr($optId) . "' name='" . esc_attr($name) . "' value='" . esc_attr($option) . "'" . ($required ? ' required' : '') . ">";
+                echo "<span>" . esc_html($option) . "</span>";
+                echo "</label>";
+            }
+            echo "</div>";
+        } elseif ($type === 'multiselect') {
+            echo "<div class='fa_checkbox_group' role='group' aria-labelledby='" . esc_attr($labelId) . "'>";
+            foreach ($options as $option) {
+                $optId = 'fa_' . $name . '_' . sanitize_title($option);
+                echo "<label class='fa_checkbox_option' for='" . esc_attr($optId) . "'>";
+                echo "<input type='checkbox' id='" . esc_attr($optId) . "' name='" . esc_attr($name) . "[]' value='" . esc_attr($option) . "'>";
+                echo "<span>" . esc_html($option) . "</span>";
+                echo "</label>";
+            }
+            echo "</div>";
         } else if ($type === 'inline_checkbox') {
             echo "<div class='fa_inline_checkbox'>";
             // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- printAtts() method escapes all attributes

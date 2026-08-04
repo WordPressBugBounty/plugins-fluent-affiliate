@@ -67,19 +67,20 @@ class ReferralController extends Controller
         $newReferral = Referral::create([
             'affiliate_id' => $affiliate->id,
             'description'  => $request->getSafe('description', Sanitizer::SANITIZE_TEXT_FIELD),
-            'amount'       => ((int)(Arr::get($data, 'amount', 0) * 100)) / 100,
+            'amount'       => round((float)Arr::get($data, 'amount', 0), 2),
             'status'       => sanitize_text_field(Arr::get($data, 'status')),
             'type'         => sanitize_text_field(Arr::get($data, 'type')),
             'provider'     => $request->getSafe('provider', Sanitizer::SANITIZE_TEXT_FIELD, 'manual'),
             'provider_id'  => $request->getSafe('provider_id', 'intval', null),
         ]);
 
-        // Fire creating event
-        // @todo: has to conrfirm with Jewel
-        do_action('fluent_affiliate/referral_marked_unpaid', $newReferral);
-
-        // Recount affiliate earnings
         $affiliate->recountEarnings();
+
+        if ($newReferral->status === 'unpaid') {
+            do_action('fluent_affiliate/referral_marked_unpaid', $newReferral);
+        } else {
+            do_action('fluent_affiliate/referral_created', $newReferral);
+        }
 
         return [
             'referral' => $newReferral,
@@ -99,19 +100,26 @@ class ReferralController extends Controller
 
         $data = $request->all();
 
+        // a provider written type such as payment or recurring_sale identifies who
+        // owns the referral, so it can only be echoed back, never introduced or
+        // changed. Manual referrals stay switchable between the two manual types.
+        $allowedTypes = in_array($referral->type, ['sale', 'opt_in'])
+            ? ['sale', 'opt_in']
+            : [$referral->type];
+
         $this->validate($data, [
             'description' => 'nullable|string',
             'amount'      => 'required|numeric|min:0',
             'status'      => 'required|string|in:unpaid,rejected,pending',
-            'type'        => 'required|string|in:sale,opt_in',
+            'type'        => 'required|string|in:' . implode(',', $allowedTypes),
         ]);
 
-        $referral->fill(array_filter([
+        $referral->fill([
             'description' => $request->getSafe('description', Sanitizer::SANITIZE_TEXT_FIELD),
-            'amount'      => ((int)(Arr::get($data, 'amount', 0) * 100)) / 100,
+            'amount'      => round((float)Arr::get($data, 'amount', 0), 2),
             'status'      => sanitize_text_field(Arr::get($data, 'status')),
             'type'        => sanitize_text_field(Arr::get($data, 'type')),
-        ]));
+        ]);
 
         $referral->save();
 
@@ -175,7 +183,6 @@ class ReferralController extends Controller
         do_action('fluent_affiliate/referral/before_delete', $referral);
  
         $referral->delete();
-        $affiliate->recountEarnings();
 
         do_action('fluent_affiliate/referral/deleted', $id, $affiliate);
 

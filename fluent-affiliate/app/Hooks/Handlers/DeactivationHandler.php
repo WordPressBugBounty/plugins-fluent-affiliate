@@ -20,7 +20,8 @@ class DeactivationHandler
             \as_unschedule_all_actions('fluent_affiliate_scheduled_daily_jobs');
         }
 
-        if (function_exists('wp_cache_flush_group') && wp_cache_supports('flush_group')) {
+        // wp_cache_supports() and wp_cache_flush_group() landed in WP 6.1; the plugin supports 6.0+
+        if (function_exists('wp_cache_supports') && function_exists('wp_cache_flush_group') && wp_cache_supports('flush_group')) {
             wp_cache_flush_group('fluent_affiliate');
         }
     }

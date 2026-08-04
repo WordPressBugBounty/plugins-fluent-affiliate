@@ -4,7 +4,7 @@ Tags: affiliate program, affiliate management, affiliate marketing, wp affiliate
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.5.0
+Stable tag: 1.6.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -212,6 +212,36 @@ No, FluentAffiliate works perfectly on its own; you don't need any other Fluent 
 8. Affiliate Payout
 
 == Changelog ==
+
+= 1.6.0 - Aug 03, 2026 =
+- Introduced: Captcha Protection on Affiliate Registration
+- Introduced: Custom Affiliate Registration Fields
+- Added: Admin Menu Title Filter Hook
+- Added: Manage CRM Tags and Lists From Affiliate Profile
+- Added: Creatives Migration from Solid Affiliate
+- Improved: Dark Mode Palette, Contrast and Admin Styles
+- Improved: Referral and Payout Transaction Table Indexes
+- Improved: Bounded Payout Export and Reconciliation Query Budgets
+- Improved: Batched Lookups and Failure Handling in Data Migration
+- Improved: Output Escaping and Input Sanitization Compliance
+- Security: Gated Report Endpoints Behind Permission Checks
+- Security: Validated Proxy-Supplied IP Headers
+- Security: Escaped Redirect URL in Auth Success Markup
+- Fixed: Manual Referral Amounts Losing a Cent
+- Fixed: Cart Manual Order Credited to the Admin's Cookie Affiliate
+- Fixed: Group Commission Rate Disagreed Between Checkout and Admin
+- Fixed: Payout Transactions Hardcoded to USD
+- Fixed: Referrals Stranded in Processing Status
+- Fixed: Per Transaction Referral Count Counted the Whole Payout
+- Fixed: Division by Zero on Zero Total Refund
+- Fixed: Tracker Dropped the Referrer on Every Visit
+- Fixed: Referral Links Broke When the Link Format Changed
+- Fixed: Checkout Fatal When an Affiliate's User Was Deleted
+- Fixed: Affiliate List Filters Lost to Sanitization
+- Fixed: Group Options Endpoint Unreachable for Managers
+- Fixed: Custom Notification Email Subjects Ignored
+- Fixed: Manual Referral Fired the Unpaid Hook for Every Status
+- Fixed: Solid Affiliate Group, Rate Type and Product Migration
 
 = 1.5.0 - Jun 22, 2026 =
 - Introduced: Lifetime Commissions

@@ -6,6 +6,7 @@ use FluentAffiliate\App\App;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Visit;
 use FluentAffiliate\App\Services\VisitService;
+use FluentAffiliate\App\Vite;
 use FluentAffiliate\Framework\Support\Arr;
 
 class Track
@@ -23,7 +24,9 @@ class Track
             return;
         }
 
-        wp_enqueue_script('fluent_aff_public', FLUENT_AFFILIATE_URL . 'assets/public/fluent_aff.js', [], FLUENT_AFFILIATE_VERSION, true);
+        $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
+
+        Vite::enqueueScript('fluent_aff_public', 'fluent_aff', [], $assetsVersion, true);
         wp_localize_script('fluent_aff_public', 'fluent_aff_vars', $this->getFluentAffVars());
     }
 
@@ -51,18 +54,8 @@ class Track
          * @var $request \FluentAffiliate\Framework\Http\Request\Request
         */
         $request = App::make('request');
-        //Arr::get($_POST, 'refer', '');
-        $refer = $request->post('refer', '');
 
-//        $data = array_filter([
-//            'affiliate_param' => sanitize_text_field(Arr::get($_POST, '__aff_id__', '')),
-//            'referrer'        => $refer ? sanitize_url($refer) : '',
-//            'url'             => sanitize_url(Arr::get($_POST, 'url', '')),
-//            'utm_campaign'    => sanitize_text_field(Arr::get($_POST, 'utm_campaign', '')),
-//            'utm_source'      => sanitize_text_field(Arr::get($_POST, 'utm_source', '')),
-//            'utm_medium'      => sanitize_text_field(Arr::get($_POST, 'utm_medium', '')),
-//            'visit_id'        => (int) Arr::get($_POST, 'visit_id', ''),
-//        ]);
+        $refer = $request->post('referrer', '');
 
         $data = array_filter([
             'affiliate_param' => sanitize_text_field( $request->post('__aff_id__', '')),

@@ -37,6 +37,15 @@ class Referral extends Model
         'id'
     ];
 
+    protected static function booted()
+    {
+        static::deleted(function ($referral) {
+            if ($referral->affiliate()->exists()) {
+                $referral->affiliate->recountEarnings();
+            }
+        });
+    }
+
     public function setSettingsAttribute($value)
     {
         $this->attributes['settings'] = maybe_serialize($value);
@@ -158,7 +167,7 @@ class Referral extends Model
             return $query;
         }
 
-        $validStatuses = ['paid', 'unpaid', 'pending', 'rejected', 'cancelled'];
+        $validStatuses = ['paid', 'unpaid', 'pending', 'rejected', 'cancelled', 'processing'];
 
         if (!in_array($status, $validStatuses)) {
             return $query;
@@ -222,15 +231,6 @@ class Referral extends Model
     public function scopeUnPaid($query)
     {
         return $query->where('status', 'unpaid');
-    }
-
-    protected static function booted()
-    {
-        static::deleted(function ($referral) {
-            if ($referral->affiliate()->exists()) {
-                $referral->affiliate->recountEarnings();
-            }
-        });
     }
 
     public function getProviderReferenceUrl()

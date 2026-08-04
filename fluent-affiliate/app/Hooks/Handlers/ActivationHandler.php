@@ -16,5 +16,7 @@ class ActivationHandler
     public function handle($network_wide = false)
     {
         DBMigrator::run($network_wide);
+
+        update_option('fluent_affiliate_db_version', FLUENT_AFFILIATE_DB_VERSION, 'no');
     }
 }

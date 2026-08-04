@@ -355,6 +355,9 @@ class AuthHelper
             }
 
             if (!$defaultItem) {
+                if (Arr::get($saved, 'custom') !== 'yes' && Arr::get($saved, 'system_defined', 'no') !== 'yes') {
+                    $saved['custom'] = 'yes';
+                }
                 $formattedItems[] = $saved;
                 continue;
             }

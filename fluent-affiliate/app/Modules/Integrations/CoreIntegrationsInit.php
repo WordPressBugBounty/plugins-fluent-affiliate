@@ -158,19 +158,6 @@ class CoreIntegrationsInit
                 ];
             }
 
-//            $allIntegrations['learndash'] = [
-//                'integration'             => 'learndash',
-//                'title'                   => 'LearnDash',
-//                'description'             => 'Connect FluentAffiliate with Learndash Courses to track sales and commissions',
-//                'type'                    => 'lms',
-//                'logo'                    => Utility::asset('images/integrations/learndash.svg'),
-//                'is_unavailable'          => true,
-//                'locked'                  => true,
-//                'coming_soon'             => true,
-//                'config'                  => [],
-//                'disable_advanced_config' => true,
-//            ];
-
             return $allIntegrations;
         });
 

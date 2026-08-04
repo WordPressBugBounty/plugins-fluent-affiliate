@@ -14,14 +14,11 @@ use FluentAffiliate\App\Http\Controllers\DashboardController;
 use FluentAffiliate\App\Http\Controllers\AffiliateController;
 use FluentAffiliate\App\Http\Controllers\ReferralController;
 use FluentAffiliate\App\Http\Controllers\SettingController;
-use FluentAffiliate\App\Http\Controllers\ReportsController;
 use FluentAffiliate\App\Http\Controllers\PayoutController;
 use FluentAffiliate\App\Http\Controllers\VisitController;
 use FluentAffiliate\App\Http\Controllers\IntegrationController;
 
-$router->prefix('reports')->withPolicy('UserPolicy')->group(function ($router) {
-    $router->get('advanced-providers', [ReportsController::class, 'getAdvancedReportProviders']);
-    $router->get('commerce-reports/{provider}', [ReportsController::class, 'getReports'])->alphaNumDash('provider');
+$router->prefix('reports')->withPolicy('ReportPolicy')->group(function ($router) {
     $router->get('dashboard-stats', [DashboardController::class, 'getStats']);
     $router->get('dashboard-chart-stats', [DashboardController::class, 'getChartStats']);
 });
@@ -42,6 +39,11 @@ $router->prefix('affiliates')->withPolicy('AffiliatePolicy')->group(function ($r
     $router->get('/{id}/customers', [AffiliateController::class, 'getCustomers'])->int('id');
     $router->get('/{id}/stats', [AffiliateController::class, 'getOverviewStats'])->int('id');
     $router->get('/{id}/statistics', [AffiliateController::class, 'statistics'])->int('id');
+
+    $router->get('/{id}/crm-contact', [AffiliateController::class, 'getCrmContact'])->int('id');
+    $router->get('/{id}/crm-options', [AffiliateController::class, 'getCrmOptions'])->int('id');
+    $router->post('/{id}/crm-contact/tags', [AffiliateController::class, 'updateCrmTags'])->int('id');
+    $router->post('/{id}/crm-contact/lists', [AffiliateController::class, 'updateCrmLists'])->int('id');
 });
 
 $router->prefix('referrals')->withPolicy('ReferralPolicy')->group(function ($router) {
@@ -80,7 +82,6 @@ $router->prefix('settings')->withPolicy('AdminPolicy')->group(function ($router)
     $router->post('/email-config', [SettingController::class, 'updateEmailConfig']);
 
     $router->get('/email-config/emails', [SettingController::class, 'getNotificationEmails']);
-    $router->post('/email-config/emails', [SettingController::class, 'updateNotificationEmails']);
     $router->patch('/email-config/emails', [SettingController::class, 'patchSingleNotificationEmail']);
 
     $router->get('/features', [SettingController::class, 'getFeatures']);

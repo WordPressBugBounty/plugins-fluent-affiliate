@@ -3,9 +3,7 @@ namespace FluentAffiliate\App\Helper;
 
 use FluentAffiliate\App\App;
 use FluentAffiliate\App\Models\Affiliate;
-use FluentAffiliate\App\Models\Customer;
 use FluentAffiliate\App\Models\Meta;
-use FluentAffiliate\App\Models\Referral;
 use FluentAffiliate\App\Models\Visit;
 use FluentAffiliate\Framework\Support\Arr;
 
@@ -135,12 +133,27 @@ class Utility
         if ($referalFormat == 'id') {
             $affiliate = Affiliate::find($paramId);
         } else if ($referalFormat == 'username') {
-            $affiliate = Affiliate::whereHas('user', function ($query) use ($paramId) {
-                $query->where('user_login', $paramId);
-            })->first();
+            $affiliate = self::getAffiliateByUserLogin($paramId);
+        }
+
+        // links shared and cookies written before referral_format was changed
+        // carry the other format, so resolve those instead of losing the referral
+        if (! $affiliate) {
+            if ($referalFormat == 'id' && ! is_numeric($paramId)) {
+                $affiliate = self::getAffiliateByUserLogin($paramId);
+            } else if ($referalFormat == 'username' && is_numeric($paramId)) {
+                $affiliate = Affiliate::find((int) $paramId);
+            }
         }
 
         return apply_filters('fluent_affiliate/affiliate_by_param', $affiliate, $paramId);
+    }
+
+    private static function getAffiliateByUserLogin($userLogin)
+    {
+        return Affiliate::whereHas('user', function ($query) use ($userLogin) {
+            $query->where('user_login', $userLogin);
+        })->first();
     }
 
     public static function getCurrentCookieAffiliate()
@@ -181,19 +194,6 @@ class Utility
         return Visit::find($visitId);
     }
 
-    /**
-     * @return bool
-     */
-    public static function wasReferred()
-    {
-        // @phpcs:ignore
-        if (! empty($_COOKIE['f_aff'])) {
-            return true;
-        }
-
-        return false;
-    }
-
     public static function isDisabledSelfReferral()
     {
         $referralSetting = static::getReferralSettings();
@@ -203,91 +203,6 @@ class Utility
         }
 
         return true;
-    }
-
-    public static function isSelfReference($customerEmail)
-    {
-        $affiliate = static::getCurrentCookieAffiliate();
-
-        if ($affiliate && $affiliate->payment_email === $customerEmail) {
-            return true;
-        }
-
-        $user = get_user_by('email', $customerEmail);
-
-        if ($user && $affiliate->user_id == $user->ID) {
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * @param Affiliate $affiliate
-     * @param int $amount
-     * @return int
-     */
-    public static function calculateAffiliateAmount($affiliate, $amount = 0)
-    {
-        $rate            = 0;
-        $rateType        = 'percentage';
-        $affiliateAmount = 0;
-
-        if (! $affiliate) {
-            return $affiliateAmount;
-        }
-
-        if ($affiliate->rate_type === 'group') {
-            $rate     = $affiliate->group->value['rate'];
-            $rateType = $affiliate->group->value['rate_type'];
-        }
-
-        if ($affiliate->rate_type === 'default') {
-            $globalSettings = static::getReferralSettings();
-            $rate           = $globalSettings['rate'];
-            $rateType       = $globalSettings['rate_type'];
-        }
-
-        if (! in_array($affiliate->rate_type, ['default', 'group'])) {
-            $rate     = $affiliate->rate;
-            $rateType = $affiliate->rate_type;
-        }
-
-        if ($rateType === 'percentage') {
-            $affiliateAmount = $amount * ($rate / 100);
-        } else {
-            $affiliateAmount = $rate;
-        }
-
-        return $affiliateAmount ?: 0;
-    }
-
-    public static function getLastOrFirstReferredAffiliate($customerEmail)
-    {
-        $globalSettings = static::getReferralSettings();
-
-        if ($globalSettings['credit_first_or_last_referrer'] !== 'yes') {
-            return null;
-        }
-
-        $customer = Customer::where('email', $customerEmail)->first();
-
-        if (! $customer) {
-            return null;
-        }
-
-        $first       = $globalSettings['credit_first_or_last_affiliate_as_default'] === 'first';
-        $affiliateID = $customer->by_affiliate_id;
-
-        if (! $first) {
-            $referral = Referral::where('customer_id', $customer->id)->orderBy('id', 'desc')->first();
-
-            if ($referral) {
-                $affiliateID = $referral->affiliate_id;
-            }
-        }
-
-        return Affiliate::find($affiliateID);
     }
 
     public static function getPortalPageUrl()
@@ -529,9 +444,42 @@ class Utility
         return $app->url('assets/' . $path);
     }
 
-    public static function getUpgradeUrl()
+    /**
+     * Build a spec-compliant "Upgrade to Pro" URL.
+     *
+     * Follows the shared Fluent* UTM spec:
+     *   utm_source  = fluent-affiliate (fixed vocabulary, never the wp.org slug)
+     *   utm_medium  = free_plugin | pro_plugin (acquisition vs cross-sell)
+     *   utm_campaign= upgrade_pro (override for xsell_<target> / license_* )
+     *   utm_content = the exact placement, e.g. feature_lock_affiliate_groups, upgrade_page
+     *   utm_term    = plugin version that generated the link
+     *   utm_id      = promo id, blank normally (omit unless passed)
+     *
+     * @param string $content   The utm_content placement.
+     * @param array  $overrides Override any utm_* param (e.g. utm_campaign for cross-sell).
+     * @return string
+     */
+    public static function getUpgradeUrl($content = 'upgrade_page', $overrides = [])
     {
-        return 'https://fluentaffiliate.com/pricing/?utm_source=plugin&utm_medium=wp_install&utm_campaign=fa_upgrade';
+        $baseUrl = apply_filters(
+            'fluent_affiliate/pro_upgrade_base_url',
+            'https://fluentaffiliate.com/pricing/'
+        );
+
+        $params = wp_parse_args($overrides, [
+            'utm_source'   => 'fluent-affiliate',
+            'utm_medium'   => defined('FLUENT_AFFILIATE_PRO_VERSION') ? 'pro_plugin' : 'free_plugin',
+            'utm_campaign' => 'upgrade_pro',
+            'utm_content'  => $content,
+            'utm_term'     => FLUENT_AFFILIATE_VERSION,
+        ]);
+
+        // Drop any blank params (e.g. an unset utm_id) so they never hit the URL.
+        $params = array_filter($params, function ($value) {
+            return $value !== '' && $value !== null;
+        });
+
+        return add_query_arg($params, $baseUrl);
     }
 
     public static function safeUnserialize($data)

@@ -127,7 +127,7 @@ class EmailNotificationSettings
             }
 
 
-            if (!empty($customSetting['email_body']) && $customSetting['is_default_body'] != 'yes') {
+            if (!empty($customSetting['email_body']) && Arr::get($customSetting, 'is_default_body') != 'yes') {
                 $emails[$emailKey]['settings']['email_body'] = $customSetting['email_body'];
                 $emails[$emailKey]['settings']['is_default_body'] = 'no';
             } else {
@@ -158,6 +158,11 @@ class EmailNotificationSettings
 
         if (Arr::get($settings, 'is_default_body', 'yes') == 'yes' || !Arr::get($settings, 'email_body', '')) {
             $settings['email_body'] = self::getDefaultEmailBody($type);
+        }
+
+        // the settings screen stores the subject as `subject`, the handlers read `email_subject`
+        if (!empty($settings['subject'])) {
+            $settings['email_subject'] = $settings['subject'];
         }
 
         return $settings;

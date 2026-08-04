@@ -128,23 +128,7 @@ class Bootstrap extends BaseConnector
             'ip'         => $order->ip_address
         ];
 
-        if ($this->isSelfReferred($affiliate, $customerData)) {
-            return;
-        }
-
-        $customerData['by_affiliate_id'] = $affiliate->id;
-        $affiliatedCustomer = $this->addOrUpdateCustomer($customerData);
-
-        $visit = $this->getCurrentVisit($affiliate);
-        $orderData['order_total'] = $this->calculateOrderTotal($orderData);
-        $commission = $this->calculateFinalCommissionAmount($affiliate, $orderData, 'product-categories');
-
-        $commission = apply_filters('fluent_affiliate/commission', $commission, [
-            'affiliate'    => $affiliate,
-            'order_data'   => $orderData,
-            'provider'     => $this->provider,
-            'vendor_order' => $order,
-        ]);
+        $orderData['currency'] = $order->currency;
 
         $formattedItems = Arr::get($orderData, 'items');
 
@@ -159,23 +143,16 @@ class Bootstrap extends BaseConnector
             $status = 'unpaid';
         }
 
-        $referralData = [
-            'affiliate_id' => $affiliate->id,
-            'customer_id'  => $affiliatedCustomer->id,
-            'visit_id'     => ($visit) ? $visit->id : null,
+        $referral = $this->createReferralForOrder($affiliate, $customerData, $orderData, [
+            'provider_id'  => $order->id,
             'description'  => $description,
             'status'       => $status,
             'type'         => 'sale',
-            'amount'       => $commission,
-            'order_total'  => $orderData['order_total'],
-            'currency'     => $order->currency,
-            'utm_campaign' => ($visit) ? $visit->utm_campaign : '',
-            'provider'     => $this->provider,
-            'provider_id'  => $order->id,
-            'products'     => $formattedItems
-        ];
+            'taxonomy'     => 'product-categories',
+            'vendor_order' => $order,
+            'skip_visit'   => $this->isAdminCreatedOrder($order),
+        ]);
 
-        $referral = $this->recordReferral($referralData);
         if (!$referral) {
             return;
         }
@@ -229,21 +206,29 @@ class Bootstrap extends BaseConnector
             'email'   => $customer ? $customer->email : '',
         ];
 
-        if (!$order->coupon_discount_total) {
-            return $this->getCurrentAffiliate($customerIdentity);
-        }
-
-        foreach ($order->usedCoupons as $coupon) {
-            $affiliateId = $coupon->getMeta('_fa_affiliate_id');
-            if ($affiliateId) {
-                $affiliate = Affiliate::find($affiliateId);
-                if ($affiliate && $affiliate->status == 'active') {
-                    return $affiliate;
+        if ($order->coupon_discount_total) {
+            foreach ($order->usedCoupons as $coupon) {
+                $affiliateId = $coupon->getMeta('_fa_affiliate_id');
+                if ($affiliateId) {
+                    $affiliate = Affiliate::find($affiliateId);
+                    if ($affiliate && $affiliate->status == 'active') {
+                        return $affiliate;
+                    }
                 }
             }
         }
 
+        // manual order runs on the admin's request, so the cookie is not the buyer's
+        if ($this->isAdminCreatedOrder($order)) {
+            return null;
+        }
+
         return $this->getCurrentAffiliate($customerIdentity);
+    }
+
+    private function isAdminCreatedOrder(Order $order)
+    {
+        return Arr::get($order->config, 'source') === 'admin';
     }
 
     protected function getFormattedOrderData(Order $order)
@@ -290,7 +275,7 @@ class Bootstrap extends BaseConnector
             'status'   => $order->payment_status,
             'subtotal' => $this->centsToDecimal($order->subtotal, $order->currency),
             'tax'      => $this->centsToDecimal($order->tax_total, $order->currency),
-            'discount' => $this->centsToDecimal(($order->discount_total + $order->coupon_discount_total), $order->currency),
+            'discount' => $this->centsToDecimal($this->getOrderDiscountTotal($order), $order->currency),
             'shipping' => $this->centsToDecimal($order->shipping_total, $order->currency),
             'total'    => $this->centsToDecimal($order->total_amount, $order->currency),
             'items'    => $formattedItems

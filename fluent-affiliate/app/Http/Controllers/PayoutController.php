@@ -6,7 +6,9 @@ use FluentAffiliate\App\Models\Transaction;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\Framework\Validator\ValidationException;
 use FluentAffiliate\Framework\Http\Request\Request;
+use FluentAffiliate\App\Helper\Helper;
 use FluentAffiliate\App\Helper\Sanitizer;
+use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\Referral;
 use FluentAffiliate\App\Models\Payout;
@@ -212,58 +214,68 @@ class PayoutController extends Controller
             ]);
         }
 
+        $currency = Utility::getCurrency();
+
         foreach ($affiliates as $affiliate) {
-            // Atomically claim unpaid referrals by setting a temporary lock status
-            $affectedRows = Referral::query()
-                ->where('affiliate_id', $affiliate->id)
-                ->where('status', 'unpaid')
-                ->whereBetween('created_at', [$startDate, $endDate])
-                ->update(['status' => 'processing']);
-        
-            if ($affectedRows === 0) {
-                continue;
+            // claim and settle together, so a failure cannot leave referrals
+            // stranded in the intermediate processing status
+            $createdTransaction = Helper::dbTransaction(function () use ($affiliate, $payout, $startDate, $endDate, $currency) {
+                // Atomically claim unpaid referrals by setting a temporary lock status
+                $affectedRows = Referral::query()
+                    ->where('affiliate_id', $affiliate->id)
+                    ->where('status', 'unpaid')
+                    ->whereBetween('created_at', [$startDate, $endDate])
+                    ->update(['status' => 'processing']);
+
+                if ($affectedRows === 0) {
+                    return null;
+                }
+
+                // Now read the claimed referrals (status = 'processing')
+                $referrals = Referral::query()
+                    ->where('affiliate_id', $affiliate->id)
+                    ->where('status', 'processing')
+                    ->whereBetween('created_at', [$startDate, $endDate])
+                    ->get();
+
+                $transactionData = [
+                    'referral_ids' => [],
+                    'total_amount' => 0
+                ];
+                foreach ($referrals as $referral) {
+                    $transactionData['referral_ids'][] = $referral->id;
+                    $transactionData['total_amount'] += $referral->amount;
+                }
+
+                if (empty($transactionData['referral_ids'])) {
+                    return null;
+                }
+
+                $eachTransaction = [
+                    'affiliate_id'  => $affiliate->id,
+                    'payout_id'     => $payout->id,
+                    'payout_method' => 'manual',
+                    'status'        => 'processing',
+                    'currency'      => $currency,
+                    'total_amount'  => $transactionData['total_amount'],
+                    'created_by'    => get_current_user_id(),
+                ];
+
+                $createdTransaction = Transaction::create($eachTransaction);
+
+                Referral::query()->whereIn('id', $transactionData['referral_ids'])
+                    ->update([
+                        'payout_transaction_id' => $createdTransaction->id,
+                        'payout_id'             => $payout->id,
+                        'status'                => 'paid'
+                    ]);
+
+                return $createdTransaction;
+            });
+
+            if ($createdTransaction) {
+                $affiliate->recountEarnings();
             }
-
-            // Now read the claimed referrals (status = 'processing')
-            $referrals = Referral::query()
-                ->where('affiliate_id', $affiliate->id)
-                ->where('status', 'processing')
-                ->whereBetween('created_at', [$startDate, $endDate])
-                ->get();
-
-            $transactionData = [
-                'referral_ids' => [],
-                'total_amount' => 0
-            ];
-            foreach ($referrals as $referral) {
-                $transactionData['referral_ids'][] = $referral->id;
-                $transactionData['total_amount'] += $referral->amount;
-            }
-
-            if (empty($transactionData['referral_ids'])) {
-                continue;
-            }
-
-            $eachTransaction = [
-                'affiliate_id'  => $affiliate->id,
-                'payout_id'     => $payout->id,
-                'payout_method' => 'manual',
-                'status'        => 'processing',
-                'currency'      => 'USD',
-                'total_amount'  => $transactionData['total_amount'],
-                'created_by'    => get_current_user_id(),
-            ];
-
-            $createdTransaction = Transaction::create($eachTransaction);
-
-            Referral::query()->whereIn('id', $transactionData['referral_ids'])
-                ->update([
-                    'payout_transaction_id' => $createdTransaction->id,
-                    'payout_id'             => $payout->id,
-                    'status'                => 'paid'
-                ]);
-
-            $affiliate->recountEarnings();
         }
 
         $totalAmount = Transaction::query()
@@ -474,22 +486,31 @@ class PayoutController extends Controller
     {
         $payout = Payout::findOrFail($payoutId);
 
-        $transactions = Transaction::query()->where('payout_id', $payout->id)
-            ->with(['affiliate'])
+        $limit = apply_filters('fluent_affiliate/data_export_limit', 5000);
+
+        $transactionQuery = Transaction::query()->where('payout_id', $payout->id)
+            ->with(['affiliate.user'])
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
             ->orderBy(
                 $request->getSafe('order_by', 'sanitize_sql_orderby', 'id'),
                 $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC')
-            )
-            ->get();
+            );
+
+        $total = $transactionQuery->count();
+        $limited = $total > $limit;
+
+        $transactions = $transactionQuery->take($limit)->get();
 
         $transactions = $transactions->map(function ($transaction) {
+            $affiliate = $transaction->affiliate;
+            $user = $affiliate ? $affiliate->user : null;
+
             return [
                 'affiliate_id'   => (int)$transaction->affiliate_id,
-                'affiliate_name' => Sanitizer::forCsv($transaction->affiliate->user_details['full_name']),
-                'email'          => Sanitizer::forCsv($transaction->affiliate->user_details['email']),
-                'payout_email'   => Sanitizer::forCsv($transaction->affiliate->payment_email),
+                'affiliate_name' => Sanitizer::forCsv($user ? $user->full_name : ''),
+                'email'          => Sanitizer::forCsv($user ? $user->user_email : ''),
+                'payout_email'   => Sanitizer::forCsv($affiliate ? $affiliate->payment_email : ''),
                 'amount'         => $transaction->total_amount,
                 'currency'       => $transaction->currency,
             ];
@@ -497,6 +518,8 @@ class PayoutController extends Controller
 
         return [
             'transactions' => $transactions,
+            'limited'      => $limited,
+            'total'        => $total,
         ];
     }
 

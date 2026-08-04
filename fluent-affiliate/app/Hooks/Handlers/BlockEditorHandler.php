@@ -7,6 +7,7 @@ use FluentAffiliate\App\Helper\Helper;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\User;
+use FluentAffiliate\App\Vite;
 use FluentAffiliate\Framework\Support\Arr;
 
 class BlockEditorHandler
@@ -17,11 +18,20 @@ class BlockEditorHandler
             $app = App::getInstance();
             $assets = $app['url.assets'];
 
-            wp_enqueue_script(
+            $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
+
+            Vite::enqueueStyle(
+                'fluent-affiliate/portal-style',
+                'portal_block_css',
+                array(),
+                $assetsVersion
+            );
+
+            Vite::enqueueScript(
                 'fluent-affiliate/portal',
-                $assets . 'admin/fa-portal-index.js',
+                'portal_block',
                 array('wp-blocks', 'wp-components', 'wp-block-editor', 'wp-element'),
-                FLUENT_AFFILIATE_VERSION,
+                $assetsVersion,
                 true
             );
 

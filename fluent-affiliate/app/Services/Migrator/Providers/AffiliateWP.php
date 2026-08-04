@@ -105,8 +105,8 @@ class AffiliateWP extends BaseMigrator
             if (is_numeric($providerId)) {
                 $providerId = (int)$providerId;
             } else {
-                $providerId = NULL;
                 $provider_sub_id = $providerId;
+                $providerId = NULL;
             }
 
             $formattedProducts = [];

@@ -8,6 +8,7 @@ use FluentAffiliate\App\Modules\Tracker\Track;
 use FluentBooking\App\Models\Booking;
 use FluentBooking\App\Models\CalendarSlot;
 use FluentBookingPro\App\Models\Order;
+use FluentAffiliate\App\Vite;
 
 class Bootstrap extends BaseConnector
 {
@@ -36,7 +37,7 @@ class Bootstrap extends BaseConnector
             return $vars;
         }
 
-        $vars['js_files']['fluent_aff_js'] = FLUENT_AFFILIATE_URL . 'assets/public/fluent_aff.js';
+        $vars['js_files']['fluent_aff_js'] = Vite::scriptUrl('fluent_aff');
         $vars['js_vars']['fluent_aff_vars'] = (new Track())->getFluentAffVars();
 
         return $vars;
@@ -52,8 +53,6 @@ class Bootstrap extends BaseConnector
             return;
         }
 
-        $visit = $this->getCurrentVisit($affiliate);
-
         $customerData = [
             'user_id'    => $booking->person_user_id,
             'email'      => $booking->email,
@@ -61,13 +60,6 @@ class Bootstrap extends BaseConnector
             'last_name'  => $booking->last_name,
             'ip'         => $order->ip_address
         ];
-
-        if ($this->isSelfReferred($affiliate, $customerData)) {
-            return;
-        }
-
-        $customerData['by_affiliate_id'] = $affiliate->id;
-        $customer = $this->addOrUpdateCustomer($customerData);
 
         $orderTotal = $this->centsToDecimal($order->total_amount, $order->currency);
 
@@ -91,30 +83,19 @@ class Bootstrap extends BaseConnector
             'description'          => $description,
         ];
 
-        $commissionAmount = $this->calculateFinalCommissionAmount($affiliate, $orderData);
-
         $status = 'pending';
         if ($order->status == 'paid') {
             $status = 'unpaid';
         }
 
-        $referralData = [
-            'affiliate_id' => $affiliate->id,
-            'customer_id'  => $customer->id,
-            'visit_id'     => ($visit) ? $visit->id : null,
+        $referral = $this->createReferralForOrder($affiliate, $customerData, $orderData, [
+            'provider_id'  => $booking->id,
             'description'  => $booking->calendar->title,
             'status'       => $status,
             'type'         => 'sale',
-            'amount'       => $commissionAmount,
-            'order_total'  => $orderTotal,
-            'currency'     => $order->currency,
-            'utm_campaign' => ($visit) ? $visit->utm_campaign : '',
-            'provider'     => $this->provider,
-            'provider_id'  => $booking->id,
-            'products'     => $formattedItems
-        ];
+            'vendor_order' => $order,
+        ]);
 
-        $referral = $this->recordReferral($referralData);
         if (!$referral) {
             return;
         }

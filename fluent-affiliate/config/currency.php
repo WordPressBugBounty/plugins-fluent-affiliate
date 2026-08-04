@@ -1,5 +1,7 @@
 <?php
 
+defined('ABSPATH') || exit;
+
 return apply_filters('fluent_affiliate/currencies', [
     'names' => [
         'AED' => 'United Arab Emirates Dirham',

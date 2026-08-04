@@ -10,6 +10,6 @@ return array(
     'hook_prefix'    => 'fluent_affiliate/',
     'rest_namespace' => 'fluent-affiliate',
     'rest_version'   => 'v2',
-    'env'            => 'dev',
+    'env'            => 'prod',
     'version'        => '1.0.0',
 );

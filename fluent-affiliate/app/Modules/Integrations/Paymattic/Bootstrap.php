@@ -47,36 +47,12 @@ class Bootstrap extends BaseConnector
             'email'   => Arr::get($customerData, 'email'),
         ]);
 
-        if (!$affiliate) {
-            return;
-        }
-
-        if ($this->isSelfReferred($affiliate, $customerData)) {
-            return; // Do not create referral for self-referrals
-        }
-        $customerData['by_affiliate_id'] = $affiliate->id;
-        $createdCustomer = $this->addOrUpdateCustomer($customerData);
-
-        $visit = $this->getCurrentVisit($affiliate);
-        $commission = $this->calculateFinalCommissionAmount($affiliate, $formattedData);
-
-        $referralData = [
-            'affiliate_id' => $affiliate->id,
-            'customer_id'  => $createdCustomer->id,
-            'visit_id'     => $visit ? $visit->id : null,
-            'description'  => Arr::get($payment, 'post_title', ''),
-            'status'       => Arr::get($payment, 'payment_status') == 'paid' ? 'unpaid' : 'pending',
-            'type'         => 'sale',
-            'amount'       => $commission,
-            'order_total'  => $formattedData['referral_order_total'],
-            'currency'     => Arr::get($formattedData, 'currency'),
-            'utm_campaign' => $visit ? $visit->utm_campaign : null,
-            'provider'     => $this->provider,
-            'provider_id'  => $transactionData['submission_id'],
-            'products'     => $formattedData['items'],
-        ];
-
-        $this->recordReferral($referralData);
+        $this->createReferralForOrder($affiliate, $customerData, $formattedData, [
+            'provider_id' => $transactionData['submission_id'],
+            'description' => Arr::get($payment, 'post_title', ''),
+            'status'      => Arr::get($payment, 'payment_status') == 'paid' ? 'unpaid' : 'pending',
+            'type'        => 'sale',
+        ]);
     }
 
     public function handlePaymentStatusChanged($submissionId, $newStatus)

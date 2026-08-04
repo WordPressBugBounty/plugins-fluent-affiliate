@@ -2,12 +2,12 @@
 
 namespace FluentAffiliate\App\Modules\Portal;
 
-use FluentAffiliate\App\App;
 use FluentAffiliate\App\Helper\Helper;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Modules\Auth\AuthHandler;
 use FluentAffiliate\App\Services\TransStrings;
+use FluentAffiliate\App\Vite;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\Framework\Support\Str;
 
@@ -99,29 +99,15 @@ class CustomerPortal
     public function loadAssets()
     {
 
-        $assetsVersion = App::getInstance()->config->get('app.env') === 'dev' ? time() : FLUENT_AFFILIATE_VERSION;
-        wp_enqueue_script('fluent_affiliate_porral',
-            FLUENT_AFFILIATE_URL . 'assets/public/customer/app.min.js',
-            [],
-            FLUENT_AFFILIATE_VERSION,
-            true
-        );
+        $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
 
-        if (Utility::isRtl()) {
-            wp_enqueue_style(
-                'fluent_affiliate_portal_style',
-                FLUENT_AFFILIATE_URL . 'assets/public/customer/app.rtl.css',
-                array(),
-                $assetsVersion
-            );
-        } else {
-            wp_enqueue_style(
-                'fluent_affiliate_portal_style',
-                FLUENT_AFFILIATE_URL . 'assets/public/customer/app.css',
-                array(),
-                $assetsVersion
-            );
-        }
+        Vite::enqueueScript('fluent_affiliate_porral', 'customer_app', [], $assetsVersion, true);
+
+        // Element Plus ships its own component styles, so they load ahead of
+        // ours and our rules stay the ones that win on a tie.
+        Vite::enqueueStyle('fluent_affiliate_portal_components', 'customer_app_css', array(), $assetsVersion);
+
+        Vite::enqueueStyle('fluent_affiliate_portal_style', 'customer_css', array(), $assetsVersion);
     }
 
     private function getRestInfo()

@@ -22,7 +22,6 @@ class Init
         $this->registerSmartCodes();
 
         add_filter('fluent_crm/subscriber_info_widgets', [$this, 'pushInfoWidgetToContact'], 99, 2);
-        add_filter('fluent_affiliate/affiliate_widgets', [$this, 'pushInfoWidgetToAffiliate'], 99, 2);
     }
 
     public function registerAutomations()
@@ -106,68 +105,6 @@ class Init
         $widgets['fluent_affiliate'] = [
             'title'   => __('Affiliate Profile', 'fluent-affiliate'),
             'content' => $html
-        ];
-
-        return $widgets;
-    }
-
-    public function pushInfoWidgetToAffiliate($widgets, $affiliate)
-    {
-        $subscriber = FluentCrmApi('contacts')->getContactByUserRef($affiliate->user_id);
-        if (!$subscriber) {
-            return $widgets;
-        }
-
-        $substats = $subscriber->stats();
-
-        $statusClass = 'fa_badge pending';
-        if ($subscriber->status == 'subscribed') {
-            $statusClass = 'fa_badge active';
-        }
-
-        $lists = '';
-        foreach ($subscriber->lists as $list) {
-            $lists .= '<span class="fa_badge unpaid">' . esc_html($list->title) . '</span> ';
-        }
-
-        $tags = '';
-        foreach ($subscriber->tags as $tag) {
-            $tags .= '<span class="fa_badge unpaid">' . esc_html($tag->title) . '</span> ';
-        }
-
-        $statsHtml = '<span class="fa_badge unpaid">' . __('Emails:', 'fluent-affiliate') . ' ' . $substats['emails'] . '</span> ';
-        $statsHtml .= '<span class="fa_badge unpaid">' . __('Opens:', 'fluent-affiliate') . ' ' . $substats['opens'] . '</span> ';
-        $statsHtml .= '<span class="fa_badge unpaid">' . __('Clicks:', 'fluent-affiliate') . ' ' . $substats['clicks'] . '</span> ';
-
-
-        $stats = [
-            [
-                'title' => __('Contact Status', 'fluent-affiliate'),
-                'value' => '<span class="' . $statusClass . '">' . $subscriber->status . '</span>'
-            ],
-            [
-                'title' => __('Lists', 'fluent-affiliate'),
-                'value' => $lists
-            ],
-            [
-                'title' => __('Tags', 'fluent-affiliate'),
-                'value' => $tags
-            ],
-            [
-                'title' => __('Stats', 'fluent-affiliate'),
-                'value' => $statsHtml
-            ]
-        ];
-
-        $html = '';
-        foreach ($stats as $stat) {
-            $html .= '<div class="widget_item"><div class="item_title">' . $stat['title'] . '</div> <div class="item_description">' . $stat['value'] . '</div></div>';
-        }
-
-        $widgets['fluent_affiliate'] = [
-            'title'   => __('CRM Profile', 'fluent-affiliate'),
-            'content' => $html,
-            'action'  => '<a style="text-decoration: none;" href="' . fluentcrm_menu_url_base('subscribers/' . $subscriber->id) . '">' . __('View Profile', 'fluent-affiliate') . '</a>'
         ];
 
         return $widgets;

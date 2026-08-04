@@ -9,6 +9,7 @@ use FluentAffiliate\App\Models\Visit;
 use FluentAffiliate\Framework\Http\Request\Request;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\App\Helper\Utility;
+use FluentAffiliate\App\Modules\Auth\AuthHelper;
 
 class PortalController extends Controller
 {
@@ -165,9 +166,9 @@ class PortalController extends Controller
             }
 
             $visit->total_referral_amount = $total;
-            $visit->is_converted          = $total ? true : false;
+            $visit->is_converted          = count($referrals) > 0;
 
-            $visit->makeHidden(['referral_id', 'id', 'refferals']);
+            $visit->makeHidden(['referral_id', 'id', 'referrals']);
         }
 
         return [
@@ -233,6 +234,13 @@ class PortalController extends Controller
             $settings['payment_email'] = $affiliate->payment_email;
         }
 
+        $extended    = apply_filters('fluent_affiliate/portal/settings_data', [
+            'form_fields' => $formFields,
+            'settings'    => $settings,
+        ], $affiliate);
+        $formFields  = Arr::get($extended, 'form_fields', $formFields);
+        $settings    = Arr::get($extended, 'settings', $settings);
+
         return [
             'settings'    => $settings,
             'form_fields' => $formFields,
@@ -272,6 +280,15 @@ class PortalController extends Controller
 
         $this->validate($data, $rules, $messages);
 
+        $allFields = AuthHelper::getRegistrationFormFields(null, 'view', true);
+        $submitted = Arr::only($data, array_keys($allFields));
+        $customValues = apply_filters('fluent_affiliate/auth/custom_field_values', [], $allFields, $submitted);
+        if (is_wp_error($customValues)) {
+            return $this->sendError([
+                'message' => $customValues->get_error_message()
+            ]);
+        }
+
         if ($payoutMethod !== 'bank_transfer') {
             $affiliate->payment_email = sanitize_email($data['payment_email']);
         }
@@ -282,6 +299,11 @@ class PortalController extends Controller
             $settings['bank_details'] = sanitize_textarea_field($data['bank_details']);
         }
         $affiliate->settings = $settings;
+
+        if (!empty($customValues)) {
+            $affiliate->custom_fields = array_merge((array) $affiliate->custom_fields, $customValues);
+        }
+
         $affiliate->save();
 
         return [

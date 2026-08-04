@@ -20,6 +20,10 @@ abstract class BaseConnectorSettings
             ];
         }, 10, 1);
 
+        add_filter('fluent_affiliate/get_integration_stored_config_' . $this->integration, function ($config) {
+            return $this->getStoredConfig();
+        }, 10, 1);
+
         add_filter('fluent_affiliate/save_integration_config_' . $this->integration, function ($message, $config) {
             return $this->saveConfig($config);
         }, 10, 2);
@@ -66,22 +70,38 @@ abstract class BaseConnectorSettings
         return wp_parse_args($settings, $defaults);
     }
 
+    /**
+     * The raw stored config, regardless of availability or enabled state.
+     * config() intentionally hides it while the connector is not running,
+     * so writers must use this to avoid persisting an empty payload over
+     * the stored commission rules.
+     *
+     * @return array
+     */
+    public function getStoredConfig()
+    {
+        $settings = Utility::getOption('_' . $this->integration . '_connector_config', []);
+
+        return is_array($settings) ? $settings : [];
+    }
+
     abstract public function getConfigFields();
 
     public function saveConfig($config = [])
     {
+        $storedConfig = wp_parse_args($this->getStoredConfig(), $this->config());
 
-        $config = wp_parse_args($config, $this->config());
+        $config = wp_parse_args($config, $storedConfig);
 
         if (isset($config['custom_affiliate_rate'])) {
             [$config['watched_product_ids'], $config['watched_cat_ids']] = $config['custom_affiliate_rate'] == 'yes'
-                ? $this->buildWatchedIds($config['custom_affiliate_rates'])
+                ? $this->buildWatchedIds((array) Arr::get($config, 'custom_affiliate_rates', []))
                 : [[], []];
         }
 
         if (isset($config['renewal_custom_affiliate_rate'])) {
             [$config['renewal_watched_product_ids'], $config['renewal_watched_cat_ids']] = $config['renewal_custom_affiliate_rate'] == 'yes'
-                ? $this->buildWatchedIds($config['renewal_custom_affiliate_rates'])
+                ? $this->buildWatchedIds((array) Arr::get($config, 'renewal_custom_affiliate_rates', []))
                 : [[], []];
         }
 

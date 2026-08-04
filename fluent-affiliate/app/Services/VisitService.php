@@ -52,14 +52,14 @@ class VisitService
             //If it's a valid Cloudflare request
             if (self::isCfIp($ipAddress)) {
                 //Use the CF-Connecting-IP header.
-                $ipAddress = sanitize_text_field(wp_unslash($_SERVER['HTTP_CF_CONNECTING_IP']));
+                $ipAddress = self::validateProxyIp(sanitize_text_field(wp_unslash($_SERVER['HTTP_CF_CONNECTING_IP'])));
             }
-        } else if ($_SERVER['REMOTE_ADDR'] == '127.0.0.1') {
+        } else if ($_SERVER['REMOTE_ADDR'] == '127.0.0.1' && self::shouldTrustProxyHeaders()) {
             // most probably it's local reverse proxy
             if (isset($_SERVER["HTTP_CLIENT_IP"])) {
-                $ipAddress = sanitize_text_field(wp_unslash($_SERVER["HTTP_CLIENT_IP"]));
+                $ipAddress = self::validateProxyIp(sanitize_text_field(wp_unslash($_SERVER["HTTP_CLIENT_IP"])));
             } else if (isset($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-                $ipAddress = (string)rest_is_ip_address(trim(current(preg_split('/,/', sanitize_text_field(wp_unslash($_SERVER['HTTP_X_FORWARDED_FOR']))))));
+                $ipAddress = self::validateProxyIp(sanitize_text_field(wp_unslash($_SERVER['HTTP_X_FORWARDED_FOR'])));
             }
         }
 
@@ -76,6 +76,31 @@ class VisitService
         }
 
         return $ipAddress;
+    }
+
+    /**
+     * Proxy headers are attacker controlled, so a value is only accepted when it
+     * really is an IP address. getIp() keys the auth rate limit, a spoofable one
+     * resets the throttle at will.
+     *
+     * @param string $value
+     * @return string empty when the header does not hold a usable IP
+     */
+    protected static function validateProxyIp($value)
+    {
+        $value = sanitize_text_field(wp_unslash($value));
+
+        $value = trim(current(explode(',', $value)));
+
+        return (string)rest_is_ip_address($value);
+    }
+
+    /**
+     * @return bool
+     */
+    protected static function shouldTrustProxyHeaders()
+    {
+        return (bool)apply_filters('fluent_affiliate/trust_proxy_headers', true);
     }
 
     /**

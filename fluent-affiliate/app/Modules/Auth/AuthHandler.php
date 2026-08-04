@@ -5,6 +5,7 @@ namespace FluentAffiliate\App\Modules\Auth;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\User;
+use FluentAffiliate\App\Vite;
 use FluentAffiliate\Framework\Support\Arr;
 
 class AuthHandler
@@ -81,6 +82,32 @@ class AuthHandler
         $this->handleUserLoginSuccess($user);
     }
 
+    private function customFieldNames($fields)
+    {
+        $names = [];
+        foreach ($fields as $name => $field) {
+            if (Arr::get($field, 'custom') === 'yes') {
+                $names[] = $name;
+            }
+        }
+
+        return $names;
+    }
+
+    private function extractCustomFieldValues($fields, $request)
+    {
+        $submitted = Arr::only($request->all(), array_keys($fields));
+        $values = apply_filters('fluent_affiliate/auth/custom_field_values', [], $fields, $submitted);
+
+        if (is_wp_error($values)) {
+            wp_send_json([
+                'message' => $values->get_error_message()
+            ], 422);
+        }
+
+        return is_array($values) ? $values : [];
+    }
+
     public function handleExistingUserRegistration()
     {
         $user = get_user_by('ID', get_current_user_id());
@@ -107,6 +134,21 @@ class AuthHandler
             ], 422);
         }
 
+        foreach ($data as $key => $value) {
+            $callBack = $fields[$key]['sanitize_callback'] ?? null;
+            if ($callBack) {
+                $data[$key] = call_user_func($callBack, $value);
+            }
+        }
+
+        $preErrors = apply_filters('fluent_affiliate/auth/pre_registration_errors', [], $data, $request);
+        if (!empty($preErrors)) {
+            wp_send_json([
+                'message' => Arr::get($preErrors, 'message', __('Registration could not be verified. Please try again.', 'fluent-affiliate')),
+                'errors'  => Arr::get($preErrors, 'errors', [])
+            ], 422);
+        }
+
         $payoutMethod = Utility::getReferralSetting('payout_method', 'paypal');
         $paymentEmail = Arr::get($data, 'payment_email');
         $bankDetails = Arr::get($data, 'bank_details', '');
@@ -127,6 +169,11 @@ class AuthHandler
             'payment_email' => ($payoutMethod === 'paypal' && $paymentEmail) ? sanitize_email($paymentEmail) : '',
             'settings'      => $settings
         ]);
+
+        $customFieldValues = $this->extractCustomFieldValues($fields, $request);
+        if ($customFieldValues) {
+            $formattedData['custom_fields'] = $customFieldValues;
+        }
 
         if ($userUrl && filter_var($userUrl, FILTER_VALIDATE_URL)) {
             // update user url
@@ -208,6 +255,14 @@ class AuthHandler
             ], 422);
         }
 
+        // Custom fields are validated + sanitized separately (Pro). Capture them
+        // before the built-in loop and drop them from $data so their (possibly
+        // array) values don't hit the scalar per-field sanitizers below.
+        $customFieldValues = $this->extractCustomFieldValues($fields, $request);
+        foreach ($this->customFieldNames($fields) as $cfName) {
+            unset($data[$cfName]);
+        }
+
         foreach ($data as $key => $value) {
             // let's sanitize the data
             $callBack = $fields[$key]['sanitize_callback'] ?? null;
@@ -231,6 +286,18 @@ class AuthHandler
             wp_send_json([
                 'message' => $rateLimit->get_error_message()
             ], 422);
+        }
+
+        // Skip on the 2FA resubmit: the captcha token is single-use.
+        $isTwoFaConfirmation = AuthHelper::isTwoFactorEnabled() && $request->get('__two_fa_signed_token');
+        if (!$isTwoFaConfirmation) {
+            $preErrors = apply_filters('fluent_affiliate/auth/pre_registration_errors', [], $data, $request);
+            if (!empty($preErrors)) {
+                wp_send_json([
+                    'message' => Arr::get($preErrors, 'message', __('Registration could not be verified. Please try again.', 'fluent-affiliate')),
+                    'errors'  => Arr::get($preErrors, 'errors', [])
+                ], 422);
+            }
         }
 
         // We need two-factor authentication here
@@ -274,11 +341,17 @@ class AuthHandler
             $settings['bank_details'] = sanitize_textarea_field($data['bank_details']);
         }
 
-        $this->handleSignupCompleted($userId, array_filter([
+        $extraData = array_filter([
             'note'          => Arr::get($data, 'note', ''),
             'payment_email' => Arr::get($data, 'payment_email', ''),
             'settings'      => $settings
-        ]));
+        ]);
+
+        if (!empty($customFieldValues)) {
+            $extraData['custom_fields'] = $customFieldValues;
+        }
+
+        $this->handleSignupCompleted($userId, $extraData);
     }
 
     private function handleUserLoginSuccess($user, $redirectUrl = null)
@@ -292,7 +365,7 @@ class AuthHandler
 
         $html = '<div class="fa_completed"><div class="fa_complted_header"><h2>' . __('Welcome back!', 'fluent-affiliate') . '</h2>';
         $html .= '<p>' . __('You have successfully logged in to the affiliate dashboard', 'fluent-affiliate') . '</p></div>';
-        $html .= '<a href="' . $redirectUrl . '" class="fa_btn fa_btn_success">' . $btnText . '</a>';
+        $html .= '<a href="' . esc_url($redirectUrl) . '" class="fa_btn fa_btn_success">' . $btnText . '</a>';
         $html .= '</div>';
 
         wp_send_json([
@@ -319,7 +392,7 @@ class AuthHandler
 
         $html = '<div class="fa_completed"><div class="fa_complted_header"><h2>' . __('Congratulations!', 'fluent-affiliate') . '</h2>';
         $html .= '<p>' . __('You have successfully applied for an affiliate account', 'fluent-affiliate') . '</p></div>';
-        $html .= '<a href="' . $redirectUrl . '" class="fa_btn fa_btn_success">' . $btnText . '</a>';
+        $html .= '<a href="' . esc_url($redirectUrl) . '" class="fa_btn fa_btn_success">' . $btnText . '</a>';
         $html .= '</div>';
 
         if (!get_current_user_id()) {
@@ -380,6 +453,8 @@ class AuthHandler
                         <?php
                             $formBuilder = new FormBuilder($fields);
                             $formBuilder->render();
+
+                            do_action('fluent_affiliate/auth/register_form_after_fields');
                         ?>
                         <div class="fa_form-group">
                             <div class="fa_form_input">
@@ -459,7 +534,10 @@ class AuthHandler
 
     public function enqueueScripts()
     {
-        wp_enqueue_script('fluent-affiliate-auth', FLUENT_AFFILIATE_URL . 'assets/public/user_auth.js', [], FLUENT_AFFILIATE_VERSION, true);
+        $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
+
+        Vite::enqueueStyle('fluent-affiliate-auth-style', 'user_auth_css', [], $assetsVersion);
+        Vite::enqueueScript('fluent-affiliate-auth', 'user_auth', [], $assetsVersion, true);
         wp_localize_script('fluent-affiliate-auth', 'fluentAuthPublic', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('fa_auth_nonce'),

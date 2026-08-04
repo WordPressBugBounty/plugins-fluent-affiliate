@@ -6,6 +6,19 @@ class ReferralsMigrator
 {
     static $tableName = 'fa_referrals';
 
+    /**
+     * Indexes that are also added to already installed tables.
+     * index name => column definition
+     */
+    static $upgradableIndexes = [
+        'fa_ref_customer'      => '(`customer_id`)',
+        'fa_ref_provider_item' => '(`provider`, `provider_id`)',
+        'fa_ref_visit'         => '(`visit_id`)',
+        'fa_ref_created'       => '(`created_at`)',
+        'fa_ref_payout'        => '(`payout_id`)',
+        'fa_ref_parent'        => '(`parent_id`)',
+    ];
+
     public static function migrate()
     {
         global $wpdb;
@@ -16,17 +29,7 @@ class ReferralsMigrator
 
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) === $table) {
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-            $indexExists = $wpdb->get_results($wpdb->prepare(
-                "SHOW INDEX FROM `$table` WHERE Key_name = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name cannot be prepared
-                'fa_ref_customer'
-            ));
-
-            if (empty($indexExists)) {
-                $safeTable = esc_sql($table);
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-                $wpdb->query("ALTER TABLE `{$safeTable}` ADD INDEX `fa_ref_customer` (`customer_id`);");
-            }
+            static::addMissingIndexes($table);
 
             return;
         }
@@ -58,9 +61,48 @@ class ReferralsMigrator
                  INDEX `fa_aff_type` (`type` ),
                  INDEX `fa_aff_provider` (`provider` ),
                  INDEX `fa_aff_provider_sub` (`provider_sub_id` ),
-                 INDEX `fa_ref_customer` (`customer_id`)
+                 INDEX `fa_ref_customer` (`customer_id`),
+                 INDEX `fa_ref_provider_item` (`provider`, `provider_id`),
+                 INDEX `fa_ref_visit` (`visit_id`),
+                 INDEX `fa_ref_created` (`created_at`),
+                 INDEX `fa_ref_payout` (`payout_id`),
+                 INDEX `fa_ref_parent` (`parent_id`)
             ) $charsetCollate;";
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
         dbDelta($sql);
+    }
+
+    /**
+     * @param string $table
+     * @return void
+     */
+    protected static function addMissingIndexes($table)
+    {
+        global $wpdb;
+
+        $safeTable = esc_sql($table);
+
+        $missingIndexes = [];
+
+        foreach (static::$upgradableIndexes as $indexName => $columns) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+            $indexExists = $wpdb->get_results($wpdb->prepare(
+                "SHOW INDEX FROM `$safeTable` WHERE Key_name = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name cannot be prepared
+                $indexName
+            ));
+
+            if (empty($indexExists)) {
+                $missingIndexes[] = "ADD INDEX `{$indexName}` {$columns}";
+            }
+        }
+
+        if (!$missingIndexes) {
+            return;
+        }
+
+        $addClauses = implode(', ', $missingIndexes);
+
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- $addClauses is built only from the hardcoded static::$upgradableIndexes list; index names and columns are SQL identifiers, which $wpdb->prepare() cannot parameterize
+        $wpdb->query("ALTER TABLE `{$safeTable}` {$addClauses};");
     }
 }

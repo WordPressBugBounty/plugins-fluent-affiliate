@@ -32,6 +32,7 @@ class AffiliatesMigrator
                 `payment_email` VARCHAR(192) NULL,
                 `status` VARCHAR(100) DEFAULT 'active',
                 `settings` LONGTEXT NULL,
+                `custom_fields` JSON NULL,
                 `note` LONGTEXT NULL,
                 `created_at` TIMESTAMP NULL,
                 `updated_at` TIMESTAMP NULL,
@@ -55,7 +56,18 @@ class AffiliatesMigrator
                 $wpdb->query("ALTER TABLE `{$safeTable}` ADD `lead_counts` bigint NULL DEFAULT '0' AFTER `visits`;");
             }
 
-        }
+            // check if the custom_fields column exists
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Required for checking column existence in migration
+            $customFieldsColumn = $wpdb->get_results($wpdb->prepare(
+                "SHOW COLUMNS FROM `$table` LIKE %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name cannot be prepared
+                'custom_fields'
+            ));
 
+            if (empty($customFieldsColumn)) {
+                $safeTable = esc_sql($table);
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Required for adding column in migration; table name sanitized via esc_sql()
+                $wpdb->query("ALTER TABLE `{$safeTable}` ADD `custom_fields` JSON NULL AFTER `settings`;");
+            }
+        }
     }
 }

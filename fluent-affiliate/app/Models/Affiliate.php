@@ -30,6 +30,7 @@ class Affiliate extends Model
         'status',
         'settings',
         'note',
+        'custom_fields',
     ];
 
     public function setSettingsAttribute($value)
@@ -71,6 +72,22 @@ class Affiliate extends Model
     public function getBankDetailsAttribute()
     {
         return Arr::get($this->settings, 'bank_details', '');
+    }
+
+    public function getCustomFieldsAttribute($value)
+    {
+        if (!$value) {
+            return [];
+        }
+
+        $data = json_decode($value, true);
+
+        return is_array($data) ? $data : [];
+    }
+
+    public function setCustomFieldsAttribute($value)
+    {
+        $this->attributes['custom_fields'] = is_array($value) ? json_encode($value) : $value;
     }
 
     public function increase($column)
@@ -190,13 +207,19 @@ class Affiliate extends Model
         ];
         foreach ($filters as $filterKey => $filter) {
 
-            if (! in_array($filterKey, $acceptedKeys)) {
+            if (! in_array($filterKey, $acceptedKeys) || ! is_array($filter)) {
                 continue;
             }
 
             if ($filterKey === 'group') {
-                $query->whereHas('group', function ($q) use ($filter, &$filters) {
-                    return $q->whereIn('id', $filter['value']);
+                $groupIds = array_filter(array_map('intval', (array) Arr::get($filter, 'value', [])));
+
+                if (! $groupIds) {
+                    continue;
+                }
+
+                $query->whereHas('group', function ($q) use ($groupIds) {
+                    return $q->whereIn('id', $groupIds);
                 });
 
                 continue;
@@ -341,6 +364,39 @@ class Affiliate extends Model
         return $this;
     }
 
+    /**
+     * Resolves the rate of the affiliate's group, for both the commission
+     * calculation and the rate shown in the admin. Returns null when the group
+     * rate does not apply, so the caller falls back to the site default. That
+     * covers an inactive group and the `default` rate type, which means the
+     * group defers to the site rate.
+     *
+     * @return array|null
+     */
+    protected function resolveGroupRate()
+    {
+        if ($this->rate_type != 'group' || !$this->group) {
+            return null;
+        }
+
+        $groupDetails = $this->group->value;
+
+        if (Arr::get($groupDetails, 'status') != 'active') {
+            return null;
+        }
+
+        $rateType = Arr::get($groupDetails, 'rate_type');
+
+        if (!in_array($rateType, ['percentage', 'flat', 'fixed'])) {
+            return null;
+        }
+
+        return [
+            'type' => $rateType == 'percentage' ? 'percentage' : 'flat',
+            'rate' => (float)Arr::get($groupDetails, 'rate', 0),
+        ];
+    }
+
     public function getCommission($amount, $scope = 'sale')
     {
         if ($this->rate_type == 'percentage') {
@@ -352,18 +408,14 @@ class Affiliate extends Model
             return $this->rate;
         }
 
-        if ($this->rate_type == 'group' && $this->group()->exists()) {
+        $groupRate = $this->resolveGroupRate();
 
-            $rate     = Arr::get($this->group->value, 'rate');
-            $rateType = Arr::get($this->group->value, 'rate_type');
-
-            if ($rateType == 'percentage') {
-                return ($amount * ($rate) / 100);
+        if ($groupRate) {
+            if ($groupRate['type'] == 'percentage') {
+                return ($amount * $groupRate['rate']) / 100;
             }
 
-            if (in_array($rateType, ['flat', 'fixed'])) {
-                return $rate;
-            }
+            return $groupRate['rate'];
         }
 
         $globalSettings = Utility::getReferralSettings();
@@ -388,7 +440,7 @@ class Affiliate extends Model
             ];
         }
 
-        if ($rateType == 'flat') {
+        if (in_array($rateType, ['flat', 'fixed'])) {
             return [
                 'type'           => 'flat',
                 'rate'           => $this->rate,
@@ -397,32 +449,20 @@ class Affiliate extends Model
             ];
         }
 
-        if ($rateType == 'group') {
-            $group        = $this->group;
-            $groupDetails = $group ? $group->value : [];
+        $groupRate = $this->resolveGroupRate();
 
-            if ($groupDetails && Arr::get($groupDetails, 'status') == 'active') {
-                $type = Arr::get($groupDetails, 'rate_type', 'percentage');
-                if ($type == 'percentage') {
-                    return [
-                        'group'          => $group,
-                        'type'           => 'percentage',
-                        'rate'           => Arr::get($groupDetails, 'rate', 0),
-                        'is_custom'      => 'no',
-                        'human_readable' => Arr::get($groupDetails, 'rate', 0) . '%' . ' (' . $group->meta_key . ')',
-                    ];
-                }
+        if ($groupRate) {
+            $group = $this->group;
 
-                if ($type == 'flat') {
-                    return [
-                        'group'          => $group,
-                        'type'           => 'flat',
-                        'rate'           => Arr::get($groupDetails, 'rate', 0),
-                        'is_custom'      => 'no',
-                        'human_readable' => Helper::formatMoney(Arr::get($groupDetails, 'rate', 0)) . ' (' . $group->meta_key . ')',
-                    ];
-                }
-            }
+            return [
+                'group'          => $group,
+                'type'           => $groupRate['type'],
+                'rate'           => $groupRate['rate'],
+                'is_custom'      => 'no',
+                'human_readable' => $groupRate['type'] == 'percentage'
+                    ? $groupRate['rate'] . '% (' . $group->meta_key . ')'
+                    : Helper::formatMoney($groupRate['rate']) . ' (' . $group->meta_key . ')',
+            ];
         }
 
         $defaultSettings = Utility::getReferralSettings();

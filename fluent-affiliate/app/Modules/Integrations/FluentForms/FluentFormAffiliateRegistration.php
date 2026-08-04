@@ -8,7 +8,6 @@ use FluentAffiliate\App\Models\User;
 use FluentAffiliate\App\Modules\Auth\AuthHelper;
 use FluentAffiliate\Framework\Support\Arr;
 use \FluentForm\App\Http\Controllers\IntegrationManagerController;
-use \FluentForm\App\Modules\Form\FormFieldsParser;
 use \FluentForm\App\Helpers\Helper;
 
 class FluentFormAffiliateRegistration extends IntegrationManagerController

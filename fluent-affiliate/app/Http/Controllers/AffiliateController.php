@@ -12,10 +12,12 @@ use FluentAffiliate\App\Models\Transaction;
 use FluentAffiliate\App\Models\User;
 use FluentAffiliate\App\Models\Visit;
 use FluentAffiliate\App\Modules\Auth\AuthHelper;
+use FluentAffiliate\App\Modules\FluentCRM\CrmContactService;
 use FluentAffiliate\App\Services\PermissionManager;
 use FluentAffiliate\App\Services\Reports\ReportService;
 use FluentAffiliate\Framework\Http\Request\Request;
 use FluentAffiliate\Framework\Support\Arr;
+use FluentCrm\App\Services\PermissionManager as CrmPermissionManager;
 
 class AffiliateController extends Controller
 {
@@ -25,11 +27,19 @@ class AffiliateController extends Controller
      */
     public function index(Request $request)
     {
+        // each filter is an array of value/operator, and getSafe would run the
+        // sanitizer over those arrays, which turns every one of them into ''
+        $filters = $request->get('filters', []);
+        $filters = is_array($filters) ? map_deep($filters, 'sanitize_text_field') : [];
+
+        $orderBy = $request->getSafe('order_by', 'sanitize_sql_orderby', 'id');
+        $orderType = $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC');
+
         $affiliates = Affiliate::query()->with(['user', 'group'])
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
-            ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'id'),$request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'))
-            ->applyCustomFilters($request->getSafe('filters', 'sanitize_text_field', []))
+            ->orderBy($orderBy, $orderType)
+            ->applyCustomFilters($filters)
             ->paginate($request->getSafe('per_page', 'intval', 20))
         ;
 
@@ -102,13 +112,94 @@ class AffiliateController extends Controller
 
         $affiliate->widgets = array_values($widgets);
 
+        if (CrmContactService::isActive() && CrmPermissionManager::currentUserCan('fcrm_read_contacts')) {
+            $affiliate->crm_profile = CrmContactService::getProfileData($affiliate);
+        }
+
         $affiliate->attached_coupons = $affiliate->getAttachedCoupons('edit');
 
         $affiliate->share_url = $affiliate->getShareUrl();
 
+        $affiliate = apply_filters('fluent_affiliate/affiliate_view_data', $affiliate);
+
         return [
             'affiliate' => $affiliate
         ];
+    }
+
+    /**
+     * Current CRM tag/list selection plus titles for the CRM Profile card.
+     */
+    public function getCrmContact(Request $request, $affiliateId)
+    {
+        $affiliate = Affiliate::findOrFail($affiliateId);
+
+        if (!CrmContactService::isActive()) {
+            return $this->sendError(['message' => __('FluentCRM is not active.', 'fluent-affiliate')]);
+        }
+        if (!CrmPermissionManager::currentUserCan('fcrm_read_contacts')) {
+            return $this->sendError(['message' => __('You do not have permission to read CRM contacts.', 'fluent-affiliate')]);
+        }
+
+        $state = CrmContactService::getContactState($affiliate);
+        if (!$state) {
+            return $this->sendError(['message' => __('No CRM contact found for this affiliate.', 'fluent-affiliate')]);
+        }
+
+        return $this->sendSuccess($state);
+    }
+
+    /**
+     * Bounded, searchable tag/list options for the CRM Profile picker.
+     */
+    public function getCrmOptions(Request $request, $affiliateId)
+    {
+        Affiliate::findOrFail($affiliateId);
+
+        if (!CrmContactService::isActive()) {
+            return $this->sendError(['message' => __('FluentCRM is not active.', 'fluent-affiliate')]);
+        }
+        if (!CrmPermissionManager::currentUserCan('fcrm_read_contacts')) {
+            return $this->sendError(['message' => __('You do not have permission to read CRM contacts.', 'fluent-affiliate')]);
+        }
+
+        $type   = $request->get('type') === 'lists' ? 'lists' : 'tags';
+        $search = $request->getSafe('search', 'sanitize_text_field');
+
+        return $this->sendSuccess(['options' => CrmContactService::getOptions($type, $search)]);
+    }
+
+    public function updateCrmTags(Request $request, $affiliateId)
+    {
+        return $this->updateCrmTaxonomy($request, $affiliateId, 'tags');
+    }
+
+    public function updateCrmLists(Request $request, $affiliateId)
+    {
+        return $this->updateCrmTaxonomy($request, $affiliateId, 'lists');
+    }
+
+    private function updateCrmTaxonomy(Request $request, $affiliateId, $type)
+    {
+        $affiliate = Affiliate::findOrFail($affiliateId);
+
+        if (!CrmContactService::isActive()) {
+            return $this->sendError(['message' => __('FluentCRM is not active.', 'fluent-affiliate')]);
+        }
+        if (!CrmPermissionManager::currentUserCan('fcrm_manage_contacts')) {
+            return $this->sendError(['message' => __('You do not have permission to manage CRM contacts.', 'fluent-affiliate')]);
+        }
+
+        $key     = $type === 'tags' ? 'tag_ids' : 'list_ids';
+        // Bound the payload: unique integer ids, capped, before it reaches the WHERE IN query.
+        $desired = array_slice(array_values(array_unique(array_map('intval', (array) $request->get($key, [])))), 0, 200);
+
+        $result = CrmContactService::syncTaxonomy($affiliate, $type, $desired);
+        if ($result === null) {
+            return $this->sendError(['message' => __('No CRM contact found for this affiliate.', 'fluent-affiliate')]);
+        }
+
+        return $this->sendSuccess(array_merge($result, ['message' => __('Updated.', 'fluent-affiliate')]));
     }
 
     /**
@@ -150,7 +241,11 @@ class AffiliateController extends Controller
             unset($filteredData['bank_details']);
         }
 
-        $createdAffiliate = $user->syncAffiliateProfile(array_filter($filteredData));
+        $filteredData = array_filter($filteredData, function ($value) {
+            return !is_null($value);
+        });
+
+        $createdAffiliate = $user->syncAffiliateProfile($filteredData);
 
         return [
             'message'   => __('Affiliate has been successfully created', 'fluent-affiliate'),
@@ -218,13 +313,15 @@ class AffiliateController extends Controller
 
         $prevStatus = $affiliate->status;
 
-        $affiliateData = array_filter([
-            'group_id'      => $data['group_id'] ?? null,
-            'rate'          => $data['rate'] ?? null,
+        // built explicitly rather than filtered: a 0 rate, a cleared note and the
+        // group_id dropped when leaving a group rate are all legitimate values
+        $affiliateData = [
+            'group_id'      => $rateType == 'group' ? ($data['group_id'] ?? null) : null,
+            'rate'          => in_array($rateType, ['flat', 'percentage']) ? ($data['rate'] ?? null) : null,
             'rate_type'     => $rateType,
             'status'        => $data['status'],
             'note'          => sanitize_textarea_field($data['note'] ?? ''), // Note is optional
-        ]);
+        ];
 
         // Handle payment method specific fields
         if ($payoutMethod === 'bank_transfer') {
@@ -392,9 +489,7 @@ class AffiliateController extends Controller
 
         foreach ($transactions as $transaction) {
             $transaction->currency_symbol = Utility::getCurrencySymbol($transaction->currency);
-            $transaction->referrals_count = Referral::query()
-                ->where('payout_id', $transaction->payout_id)
-                ->count();
+            $transaction->referrals_count = $transaction->referrals()->count();
         }
 
         return [

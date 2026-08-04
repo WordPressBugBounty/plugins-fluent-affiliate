@@ -194,4 +194,62 @@ class Helper
             'custom_fields' => []
         ]);
     }
+
+    // AES-256-CTR encrypt ('e') / decrypt ('d') for secrets at rest, keyed off WP salts.
+    public static function encryptDecrypt($value, $type = 'e')
+    {
+        if (empty($value) || !in_array($type, ['e', 'd'], true) || !extension_loaded('openssl')) {
+            return '';
+        }
+
+        $key  = defined('LOGGED_IN_KEY') && !empty(LOGGED_IN_KEY) ? LOGGED_IN_KEY : '';
+        $salt = defined('LOGGED_IN_SALT') && !empty(LOGGED_IN_SALT) ? LOGGED_IN_SALT : '';
+
+        if (empty($key) || empty($salt)) {
+            return '';
+        }
+
+        $key      = hash('sha256', $key, true); // 32-byte key for AES-256
+        $method   = 'aes-256-ctr';
+        $ivLength = openssl_cipher_iv_length($method);
+
+        if ($type === 'e') {
+            try {
+                $iv        = random_bytes($ivLength);
+                $encrypted = openssl_encrypt($value . $salt, $method, $key, OPENSSL_RAW_DATA, $iv);
+                if ($encrypted === false) {
+                    return '';
+                }
+                // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- binary payload, not obfuscation
+                return base64_encode($iv . $encrypted);
+            } catch (\Exception $e) {
+                return '';
+            }
+        }
+
+        try {
+            // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- binary payload, not obfuscation
+            $decoded = base64_decode($value, true);
+            if ($decoded === false || strlen($decoded) <= $ivLength) {
+                return '';
+            }
+
+            $iv         = substr($decoded, 0, $ivLength);
+            $ciphertext = substr($decoded, $ivLength);
+
+            $decrypted = openssl_decrypt($ciphertext, $method, $key, OPENSSL_RAW_DATA, $iv);
+            if ($decrypted === false) {
+                return '';
+            }
+
+            $saltLength = strlen($salt);
+            if (substr($decrypted, -$saltLength) !== $salt) {
+                return '';
+            }
+
+            return substr($decrypted, 0, -$saltLength);
+        } catch (\Exception $e) {
+            return '';
+        }
+    }
 }

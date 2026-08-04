@@ -31,4 +31,11 @@ class AdminPolicy extends Policy
 
         return $hasAccess['affiliate'] || $hasAccess['referral'] || $hasAccess['payout'];
     }
+
+    public function getAffiliateGroupsOptions(Request $request): bool
+    {
+        $hasAccess = PermissionManager::hasAccess();
+
+        return $hasAccess['affiliate'] || $hasAccess['referral'] || $hasAccess['payout'];
+    }
 }

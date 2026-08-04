@@ -8,6 +8,7 @@ use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\AffiliateGroup;
 use FluentAffiliate\App\Services\PermissionManager;
 use FluentAffiliate\App\Services\TransStrings;
+use FluentAffiliate\App\Vite;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\Framework\Support\Str;
 
@@ -32,9 +33,11 @@ class AdminMenuHandler
     {
         $capabilities = PermissionManager::getMenuCapabilities();
 
+        $menuTitle = apply_filters('fluent_affiliate/admin_menu_title', __('FluentAffiliate', 'fluent-affiliate'));
+
         add_menu_page(
-            __('FluentAffiliate', 'fluent-affiliate'),
-            __('FluentAffiliate', 'fluent-affiliate'),
+            $menuTitle,
+            $menuTitle,
             $capabilities['dashboard'],
             $this->slug,
             [$this, 'render'],
@@ -215,37 +218,27 @@ class AdminMenuHandler
 
         $assets = $app['url.assets'];
 
-        $assetsVersion = App::getInstance()->config->get('app.env') === 'dev' ? time() : FLUENT_AFFILIATE_VERSION;
+        $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
 
-        if (Utility::isRtl()) {
-            wp_enqueue_style(
-                $this->slug . '_admin_app',
-                $assets . 'admin/admin.rtl.css',
-                array(),
-                $assetsVersion
-            );
-        } else {
-            wp_enqueue_style(
-                $this->slug . '_admin_app',
-                $assets . 'admin/admin.css',
-                array(),
-                $assetsVersion
-            );
-        }
+        // Element Plus ships its own component styles, so they load ahead of
+        // ours and our rules stay the ones that win on a tie.
+        Vite::enqueueStyle($this->slug . '_admin_components', 'admin_app_css', array(), $assetsVersion);
+
+        Vite::enqueueStyle($this->slug . '_admin_app', 'admin_css', array(), $assetsVersion);
 
         do_action($this->slug . '_loading_app'); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound -- added slug as a prefix
 
-        wp_enqueue_script(
+        Vite::enqueueScript(
             $this->slug . '_admin_app',
-            $assets . 'admin/app.min.js',
+            'admin_app',
             array('jquery'),
             $assetsVersion,
             true
         );
 
-        wp_enqueue_script(
+        Vite::enqueueScript(
             $this->slug . '_global_admin',
-            $assets . 'admin/global_admin.js',
+            'global_admin',
             array(),
             $assetsVersion,
             true
@@ -447,6 +440,22 @@ class AdminMenuHandler
                 'disable'        => false,
                 'svg_icon'       => '<svg width="20" height="20" viewBox="0 0 24 24" color="currentColor" fill="none"><path fill="currentColor" d="M7.25,9 C7.25,8.586 7.586,8.25 8,8.25 L16,8.25 C16.414,8.25 16.75,8.586 16.75,9 C16.75,9.414 16.414,9.75 16,9.75 L8,9.75 C7.586,9.75 7.25,9.414 7.25,9 Z M7.25,15 C7.25,14.586 7.586,14.25 8,14.25 L16,14.25 C16.414,14.25 16.75,14.586 16.75,15 C16.75,15.414 16.414,15.75 16,15.75 L8,15.75 C7.586,15.75 7.25,15.414 7.25,15 Z" /><path fill="currentColor" d="M12.057,1.75 L12.057,1.75 C14.248,1.75 15.969,1.75 17.312,1.931 C18.689,2.116 19.781,2.503 20.639,3.361 C21.497,4.219 21.884,5.311 22.069,6.688 C22.25,8.031 22.25,9.752 22.25,11.943 L22.25,12.057 C22.25,14.248 22.25,15.969 22.069,17.312 C21.884,18.689 21.497,19.781 20.639,20.639 C19.781,21.497 18.689,21.884 17.312,22.069 C15.969,22.25 14.248,22.25 12.057,22.25 L11.943,22.25 C9.752,22.25 8.031,22.25 6.688,22.069 C5.311,21.884 4.219,21.497 3.361,20.639 C2.503,19.781 2.116,18.689 1.931,17.312 C1.75,15.969 1.75,14.248 1.75,12.057 L1.75,11.943 C1.75,9.752 1.75,8.031 1.931,6.688 C2.116,5.311 2.503,4.219 3.361,3.361 C4.219,2.503 5.311,2.116 6.688,1.931 C8.031,1.75 9.752,1.75 11.943,1.75 L12.057,1.75 Z M6.888,3.417 C5.678,3.58 4.955,3.889 4.422,4.422 C3.889,4.955 3.58,5.678 3.417,6.888 C3.252,8.12 3.25,9.74 3.25,12 C3.25,14.26 3.252,15.88 3.417,17.112 C3.58,18.322 3.889,19.045 4.422,19.578 C4.955,20.111 5.678,20.42 6.888,20.583 C8.12,20.748 9.74,20.75 12,20.75 C14.26,20.75 15.88,20.748 17.112,20.583 C18.322,20.42 19.045,20.111 19.578,19.578 C20.111,19.045 20.42,18.322 20.583,17.112 C20.748,15.88 20.75,14.26 20.75,12 C20.75,9.74 20.748,8.12 20.583,6.888 C20.42,5.678 20.111,4.955 19.578,4.422 C19.045,3.889 18.322,3.58 17.112,3.417 C15.88,3.252 14.26,3.25 12,3.25 C9.74,3.25 8.12,3.252 6.888,3.417 Z" /></svg>',
                 'component_type' => 'StandAloneComponent',
+                'children'       => [
+                    'registration_settings' => [
+                        'title'   => __('Registration Fields', 'fluent-affiliate'),
+                        'disable' => false,
+                        'route'   => [
+                            'name' => 'registration_settings'
+                        ]
+                    ],
+                    'captcha_settings'       => [
+                        'title'   => __('Captcha', 'fluent-affiliate'),
+                        'disable' => false,
+                        'route'   => [
+                            'name' => 'captcha_settings'
+                        ]
+                    ]
+                ],
                 'route'          => [
                     'name' => 'registration_settings'
                 ]

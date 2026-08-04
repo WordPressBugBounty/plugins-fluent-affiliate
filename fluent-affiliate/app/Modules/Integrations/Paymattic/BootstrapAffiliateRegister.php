@@ -25,7 +25,7 @@ class BootstrapAffiliateRegister extends IntegrationManager
             10
         );
 
-        $this->logo = FLUENT_AFFILIATE_URL . 'assets/images/FluentAffiliateLogo.svg';
+        $this->logo = FLUENT_AFFILIATE_URL . 'assets/images/FluentAffiliate.svg';
         $this->description = __('Connect Paymattic with Fluent Affiliate for Affiliate Registration', 'fluent-affiliate');
 
         $this->registerAdminHooks();

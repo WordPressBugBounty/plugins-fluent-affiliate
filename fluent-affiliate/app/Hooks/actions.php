@@ -34,6 +34,9 @@ add_action('init', function () use ($app) {
     // Block Editor Handler
     (new \FluentAffiliate\App\Hooks\Handlers\BlockEditorHandler())->init();
 
+    // Scheduled Jobs Handler
+    (new \FluentAffiliate\App\Hooks\Handlers\ScheduledJobsHandler())->register();
+
 });
 
 $app->addAction('admin_init', function () use ($app) {

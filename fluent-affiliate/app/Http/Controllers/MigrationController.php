@@ -80,6 +80,12 @@ class MigrationController extends Controller
 
         $migrator = $this->getMigrator($migrator);
 
+        if (!$migrator) {
+            return $this->sendError([
+                'message' => __('Migrator not found', 'fluent-affiliate')
+            ], 422);
+        }
+
         $counts = $migrator->getCounts();
 
         $migrationLogs = apply_filters('fluent_affiliate/get_migration_statistics', [
@@ -161,6 +167,12 @@ class MigrationController extends Controller
         $migrator = $request->getSafe('migrator', 'sanitize_text_field', 'affiliate_wp');
 
         $migrator = $this->getMigrator($migrator);
+
+        if (!$migrator) {
+            return $this->sendError([
+                'message' => __('Migrator not found', 'fluent-affiliate')
+            ], 422);
+        }
 
         $migrator->setTimeLimit(Utility::getMaxRunTime());
 
@@ -275,9 +287,7 @@ class MigrationController extends Controller
         ];
 
         if (!isset($migratorClasses[$migrator])) {
-            return $this->sendError([
-                'message' => __('Migrator not found', 'fluent-affiliate')
-            ], 422);
+            return null;
         }
 
         $this->migrator = new $migratorClasses[$migrator]();

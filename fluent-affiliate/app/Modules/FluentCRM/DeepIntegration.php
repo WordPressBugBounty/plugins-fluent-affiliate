@@ -125,38 +125,56 @@ class DeepIntegration
         $runTime = 15;
         if ($page == 1) {
             fluentcrm_update_option('_fluent_aff_sync_count', 0);
+            fluentcrm_update_option('_fluent_aff_sync_cursor', 0);
             $runTime = 5;
         }
 
         $run = true;
 
         while ($run) {
-            $offset = fluentcrm_get_option('_fluent_aff_sync_count', 0);
+            $lastId = (int) fluentcrm_get_option('_fluent_aff_sync_cursor', 0);
+            $syncedCount = (int) fluentcrm_get_option('_fluent_aff_sync_count', 0);
+
             $affiliates = fluentCrmDb()->table('fa_affiliates')
+                ->where('id', '>', $lastId)
                 ->limit(10)
-                ->offset($offset)
                 ->orderBy('id', 'ASC')
                 ->get();
 
-            if ($affiliates) {
-                foreach ($affiliates as $affiliate) {
-                    $subscribers = Helper::getWPMapUserInfo($affiliate->user_id);
-                    Subscriber::import(
-                        [$subscribers],
-                        Arr::get($inputs, 'tags', []),
-                        Arr::get($inputs, 'lists', []),
-                        true,
-                        $contactStatus,
-                        $sendDoubleOptin
-                    );
-
-                    fluentcrm_update_option('_fluent_aff_sync_count', $offset + 1);
-                    if (time() - $startTime > $runTime) {
-                        return $this->getSyncStatus();
-                    }
-                }
-            } else {
+            if (!$affiliates) {
+                // nothing left to read, so the counter reflects the whole table
+                fluentcrm_update_option('_fluent_aff_sync_count', fluentCrmDb()->table('fa_affiliates')->count());
                 $run = false;
+                continue;
+            }
+
+            $isTimeUp = false;
+
+            foreach ($affiliates as $affiliate) {
+                $subscribers = Helper::getWPMapUserInfo($affiliate->user_id);
+                Subscriber::import(
+                    [$subscribers],
+                    Arr::get($inputs, 'tags', []),
+                    Arr::get($inputs, 'lists', []),
+                    true,
+                    $contactStatus,
+                    $sendDoubleOptin
+                );
+
+                $lastId = $affiliate->id;
+                $syncedCount++;
+
+                if (time() - $startTime > $runTime) {
+                    $isTimeUp = true;
+                    break;
+                }
+            }
+
+            fluentcrm_update_option('_fluent_aff_sync_cursor', $lastId);
+            fluentcrm_update_option('_fluent_aff_sync_count', $syncedCount);
+
+            if ($isTimeUp) {
+                return $this->getSyncStatus();
             }
         }
 

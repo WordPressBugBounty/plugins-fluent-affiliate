@@ -44,6 +44,27 @@ return function ($file) {
     });
 
 
+    add_action('fluent_affiliate/admin_app_rendering', function () {
+        $currentDBVersion = get_option('fluent_affiliate_db_version');
+
+        if ($currentDBVersion && version_compare($currentDBVersion, FLUENT_AFFILIATE_DB_VERSION, '>=')) {
+            return;
+        }
+
+        if (get_transient('fluent_affiliate_db_migration_lock')) {
+            return;
+        }
+
+        set_transient('fluent_affiliate_db_migration_lock', 1, 5 * MINUTE_IN_SECONDS);
+
+        \FluentAffiliate\Database\DBMigrator::run();
+
+        update_option('fluent_affiliate_db_version', FLUENT_AFFILIATE_DB_VERSION, 'no');
+
+        delete_transient('fluent_affiliate_db_migration_lock');
+    });
+
+
     /* Temporary Init for FluentCRM Module (check is handled inside) */
     add_action('fluentcrm_loaded', function () {
         (new \FluentAffiliate\App\Modules\FluentCRM\Init())->register();

@@ -55,7 +55,7 @@ class IntegrationController extends Controller
             ]);
         }
 
-        $this->reindexIntegrations($config['is_enabled'] === 'yes' ? $integration : null);
+        $this->reindexIntegrations(Arr::get($config, 'is_enabled') === 'yes' ? $integration : null);
 
         return [
             'message' => $message,
@@ -77,7 +77,15 @@ class IntegrationController extends Controller
             ];
         }
 
-        $settings = Arr::get($integration, 'config', []);
+        $settings = apply_filters(
+            'fluent_affiliate/get_integration_stored_config_' . $integrationKey,
+            Utility::getOption('_' . $integrationKey . '_connector_config', [])
+        );
+
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
         $settings['is_enabled'] = $status;
         $integrations[$integrationKey]['config'] = $settings;
 

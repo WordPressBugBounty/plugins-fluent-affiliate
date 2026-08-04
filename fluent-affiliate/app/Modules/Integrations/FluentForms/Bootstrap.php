@@ -2,8 +2,6 @@
 
 namespace FluentAffiliate\App\Modules\Integrations\FluentForms;
 
-use FluentAffiliate\App\Models\Referral;
-use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\App\Modules\Integrations\BaseConnector;
 use FluentAffiliate\App\Helper\Utility;
@@ -25,8 +23,6 @@ class Bootstrap extends BaseConnector
         add_action('fluentform/payment_cancelled', array($this, 'markReferralAsRevoked'), 10, 3);
 
         add_action('fluentform/after_transaction_status_change', [$this, 'maybeMarkReferralComplete'], 10, 3);
-
-        // add_action('fluentform/subscription_payment_success', array($this, 'markSubscriptionReferralAsComplete'), 99, 3);
 
         /*
          * Internal
@@ -90,42 +86,13 @@ class Bootstrap extends BaseConnector
             'email'   => Arr::get($customerData, 'email'),
         ]);
 
-        if (!$affiliate) {
-            return;
-        }
-
-        if ($this->isSelfReferred($affiliate, $customerData)) {
-            return; // Do not create referral for self-referrals
-        }
-
-        $customerData['by_affiliate_id'] = $affiliate->id;
-        $createdCustomer = $this->addOrUpdateCustomer($customerData);
-        $visit = $this->getCurrentVisit($affiliate);
-        $commission = $this->calculateFinalCommissionAmount($affiliate, $formattedData);
-
-        if ($commission <= 0) {
-            return;
-        }
-
-        $description = $form->title;
-
-        $referralData = [
-            'affiliate_id' => $affiliate->id,
-            'customer_id'  => $createdCustomer->id,
-            'visit_id'     => $visit ? $visit->id : null,
-            'description'  => $description,
-            'status'       => ($formattedData['status'] === 'paid') ? 'unpaid' : 'pending',
-            'type'         => 'payment',
-            'amount'       => $commission,
-            'order_total'  => $formattedData['referral_order_total'],
-            'currency'     => Arr::get($formattedData, 'currency'),
-            'utm_campaign' => $visit ? $visit->utm_campaign : null,
-            'provider'     => $this->provider,
-            'provider_id'  => $submissionId,
-            'products'     => $formattedData['items'],
-        ];
-
-        $this->recordReferral($referralData);
+        $this->createReferralForOrder($affiliate, $customerData, $formattedData, [
+            'provider_id'        => $submissionId,
+            'description'        => $form->title,
+            'status'             => ($formattedData['status'] === 'paid') ? 'unpaid' : 'pending',
+            'type'               => $type,
+            'ignore_zero_amount' => true,
+        ]);
     }
 
     protected function getFormattedPaymentData($submissionId, $submission, $form)

@@ -29,7 +29,7 @@ class SettingController extends Controller
 
         $newSettings = Arr::only($newSettings, array_keys(Utility::defaultEmailSettings()));
 
-        $newSettings['email_footer'] = wp_kses_post($newSettings['email_footer']);
+        $newSettings['email_footer'] = wp_kses_post(Arr::get($newSettings, 'email_footer', ''));
 
         if (!empty($newSettings['send_from_email'])) {
             if (!is_email($newSettings['send_from_email'])) {
@@ -231,7 +231,17 @@ class SettingController extends Controller
             }
 
             $enabled[] = $integration;
-            $integrationConfig = Arr::get($integrationData, 'config', []);
+
+            // raw stored config, see IntegrationController::updateIntegrationStatus()
+            $integrationConfig = apply_filters(
+                'fluent_affiliate/get_integration_stored_config_' . $integration,
+                Utility::getOption('_' . $integration . '_connector_config', [])
+            );
+
+            if (!is_array($integrationConfig)) {
+                $integrationConfig = [];
+            }
+
             $integrationConfig['is_enabled'] = 'yes';
             Utility::updateOption('_' . $integration . '_connector_config', $integrationConfig);
         }

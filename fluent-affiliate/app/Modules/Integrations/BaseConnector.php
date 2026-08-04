@@ -2,7 +2,6 @@
 
 namespace FluentAffiliate\App\Modules\Integrations;
 
-use FluentAffiliate\App\Helper\Action;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Customer;
 use FluentAffiliate\App\Models\Referral;
@@ -149,7 +148,7 @@ class BaseConnector
         $formattedOrderData = [
             'subtotal' => $this->centsToDecimal($order->subtotal, $order->currency),
             'tax'      => $this->centsToDecimal($order->tax_total, $order->currency),
-            'discount' => $this->centsToDecimal(($order->discount_total + $order->coupon_discount_total), $order->currency),
+            'discount' => $this->centsToDecimal($this->getOrderDiscountTotal($order), $order->currency),
             'shipping' => $this->centsToDecimal($order->shipping_total, $order->currency),
         ];
 
@@ -157,6 +156,12 @@ class BaseConnector
 
         $currentOrderTotal = $referral->order_total;
         $updatedOrderTotal = $this->calculateOrderTotal($formattedOrderData) - $totalRefund;
+
+        // a fully discounted order stores order_total 0 with a fixed rate commission,
+        // and there is no original total to reduce the commission in proportion to
+        if ($currentOrderTotal <= 0) {
+            return $referral;
+        }
 
         $reductionRatio = $updatedOrderTotal / $currentOrderTotal;
         $updatedCommission = round($referral->amount * $reductionRatio, 2);
@@ -171,6 +176,20 @@ class BaseConnector
         do_action('fluent_affiliate/referral_commission_updated', $referral);
 
         return $referral;
+    }
+
+    /**
+     * Order level discount in the provider's own unit. FluentCart renamed its
+     * `discount_total` column to `manual_discount_total`, so the old name is
+     * read as the fallback for stores on an older FluentCart.
+     *
+     * @return float|int
+     */
+    protected function getOrderDiscountTotal($order)
+    {
+        $manualDiscount = isset($order->manual_discount_total) ? $order->manual_discount_total : $order->discount_total;
+
+        return $manualDiscount + $order->coupon_discount_total;
     }
 
     /**
@@ -199,7 +218,9 @@ class BaseConnector
         }
 
         $email = Arr::get($customerData, 'email', '');
-        if ($email == $affiliate->payment_email || $email == $affiliate->user->user_email) {
+        $affiliateEmail = $affiliate->user ? $affiliate->user->user_email : '';
+
+        if ($email && ($email == $affiliate->payment_email || $email == $affiliateEmail)) {
             return true;
         }
 
@@ -294,15 +315,74 @@ class BaseConnector
         return (Arr::get($config, 'custom_affiliate_rate') === 'yes') && (Arr::get($config, 'watched_product_ids') || Arr::get($config, 'watched_cat_ids'));
     }
 
+    /**
+     * Shared referral creation pipeline for the integrations. A bootstrap resolves
+     * the affiliate and formats the vendor's order, this runs the guards, resolves
+     * the customer, visit and commission, and records the referral.
+     *
+     * @param Affiliate|null $affiliate
+     * @param array $customerData user_id, email, first_name, last_name, ip
+     * @param array $orderData formatted order: items, currency, referral_order_total
+     * @param array $args provider_id, description, status, type, taxonomy, vendor_order, skip_visit
+     * @return Referral|null
+     */
+    public function createReferralForOrder($affiliate, $customerData, $orderData, $args = [])
+    {
+        if (!$affiliate || $affiliate->status != 'active') {
+            return null;
+        }
+
+        if ($this->isSelfReferred($affiliate, $customerData)) {
+            return null;
+        }
+
+        $customerData['by_affiliate_id'] = $affiliate->id;
+        $customer = $this->addOrUpdateCustomer($customerData);
+
+        // skipped when the buyer did not place the order, so the cookie visit is not theirs
+        $visit = Arr::get($args, 'skip_visit') ? null : $this->getCurrentVisit($affiliate);
+
+        $commission = $this->calculateFinalCommissionAmount($affiliate, $orderData, Arr::get($args, 'taxonomy', ''));
+
+        $commission = apply_filters('fluent_affiliate/commission', $commission, [
+            'affiliate'    => $affiliate,
+            'order_data'   => $orderData,
+            'provider'     => $this->provider,
+            'vendor_order' => Arr::get($args, 'vendor_order'),
+        ]);
+
+        // recordReferral only drops zero amounts for the sale types, so a type
+        // outside that set has to opt in
+        if (Arr::get($args, 'ignore_zero_amount') && $commission <= 0) {
+            return null;
+        }
+
+        $referralData = [
+            'affiliate_id' => $affiliate->id,
+            'customer_id'  => $customer->id,
+            'visit_id'     => $visit ? $visit->id : null,
+            'description'  => Arr::get($args, 'description', ''),
+            'status'       => Arr::get($args, 'status', 'pending'),
+            'type'         => Arr::get($args, 'type', 'sale'),
+            'amount'       => $commission,
+            'order_total'  => Arr::get($orderData, 'referral_order_total'),
+            'currency'     => Arr::get($orderData, 'currency'),
+            'utm_campaign' => $visit ? $visit->utm_campaign : null,
+            'provider'     => $this->provider,
+            'provider_id'  => Arr::get($args, 'provider_id'),
+            'products'     => Arr::get($orderData, 'items', []),
+        ];
+
+        return $this->recordReferral($referralData);
+    }
+
     public function calculateFinalCommissionAmount($affiliate, $orderData, $taxonomy = '')
     {
         $referralOrderTotal = Arr::get($orderData, 'referral_order_total');
 
         $config = $this->getConfig();
 
-        $hasCalculatedRate = (Arr::get($config, 'custom_affiliate_rate') === 'yes') && (Arr::get($config, 'watched_product_ids') || Arr::get($config, 'watched_cat_ids'));
-
-        if (!$hasCalculatedRate) {
+        if (!$this->hasCustomConfigRate()) {
             return $affiliate->getCommission($referralOrderTotal, 'sale');
         }
 
