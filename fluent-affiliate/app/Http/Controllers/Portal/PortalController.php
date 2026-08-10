@@ -10,9 +10,23 @@ use FluentAffiliate\Framework\Http\Request\Request;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Modules\Auth\AuthHelper;
+use FluentAffiliate\App\Modules\Portal\CustomerPortal;
 
 class PortalController extends Controller
 {
+    public function getBootstrap(Request $request)
+    {
+        $affiliate = Affiliate::query()->where('user_id', get_current_user_id())->first();
+
+        if (! $affiliate || $affiliate->status !== 'active') {
+            return $this->sendError([
+                'message' => __('Affiliate Account could not be found', 'fluent-affiliate'),
+            ]);
+        }
+
+        return (new CustomerPortal())->getBootstrapData($affiliate);
+    }
+
     public function getStats(Request $request)
     {
         $affiliate = Affiliate::query()->where('user_id', get_current_user_id())->first();

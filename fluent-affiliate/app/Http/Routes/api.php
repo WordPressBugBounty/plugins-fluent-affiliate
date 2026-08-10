@@ -116,6 +116,7 @@ $router->prefix('settings')->withPolicy('AdminPolicy')->group(function ($router)
 
 // Frontend User Routes
 $router->prefix('portal')->withPolicy('UserPolicy')->group(function ($router) {
+    $router->get('bootstrap', [PortalController::class, 'getBootstrap']);
     $router->get('stats', [PortalController::class, 'getStats']);
     $router->get('referrals', [PortalController::class, 'getReferrals']);
     $router->get('transactions', [PortalController::class, 'getTransactions']);

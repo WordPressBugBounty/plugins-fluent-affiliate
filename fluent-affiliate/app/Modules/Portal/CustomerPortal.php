@@ -129,11 +129,25 @@ class CustomerPortal
 
     private function enqueueAsset($isModern)
     {
-        $affiliate = Affiliate::where('user_id', get_current_user_id())->first();
-        if (!$affiliate) {
-            return;
-        }
+        // Only boot vars go inline. The rest is fetched from portal/bootstrap, so a content
+        // blocker can never kill this script by matching a third party domain inside it.
+        wp_localize_script('fluent_affiliate_porral', 'fluentAffiliatePortal', [
+            'slug'       => $this->slug,
+            'nonce'      => wp_create_nonce($this->slug),
+            'rest'       => $this->getRestInfo(),
+            'is_modern'  => $isModern,
+            'boot_error' => __('The affiliate portal could not load its data. Please reload the page and contact support if the problem persists.', 'fluent-affiliate'),
+        ]);
+    }
 
+    /**
+     * Portal bootstrap payload, served over REST
+     *
+     * @param \FluentAffiliate\App\Models\Affiliate $affiliate
+     * @return array
+     */
+    public function getBootstrapData(Affiliate $affiliate)
+    {
         $brandedCoupons = $affiliate->getAttachedCoupons('view');
 
         $formattedCoupons = [];
@@ -147,9 +161,6 @@ class CustomerPortal
         $featuresSaved = Utility::getOption('fluent_affiliate_features', []);
 
         $portalData = [
-            'slug'             => $this->slug,
-            'nonce'            => wp_create_nonce($this->slug),
-            'rest'             => $this->getRestInfo(),
             'site_info'        => [
                 'site_url'  => home_url('/'),
                 'site_name' => get_bloginfo('name'),
@@ -162,14 +173,11 @@ class CustomerPortal
             'user'             => array_merge($affiliate->user_details, ['avatar' => '']),
             'branded_coupons'  => $formattedCoupons,
             'currency'         => $this->getCurrency(),
-            'is_modern'        => $isModern,
             'menu_items'       => Helper::getPortalMenuItems($affiliate),
             'qr_code_settings' => Arr::get($featuresSaved, 'affiliate_qr_code', [])
         ];
 
-        $portalData = apply_filters('fluent_affiliate/portal_localize_data', $portalData);
-
-        wp_localize_script('fluent_affiliate_porral', 'fluentAffiliatePortal', $portalData);
+        return apply_filters('fluent_affiliate/portal_localize_data', $portalData);
     }
 
     /**
@@ -196,6 +204,12 @@ class CustomerPortal
           display: flex;
           align-items: center;
           justify-content: center;
+        }
+        .fa_boot_error {
+          padding: 30px 16px;
+          text-align: center;
+          border-radius: 8px;
+          border: 1px solid var(--fa-primary-border, #E1E4EA);
         }
         .fa-loading {
           min-width: 100px;

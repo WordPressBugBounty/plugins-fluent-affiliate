@@ -4,7 +4,7 @@ Tags: affiliate program, affiliate management, affiliate marketing, wp affiliate
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.6.0
+Stable tag: 1.6.01
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -212,6 +212,11 @@ No, FluentAffiliate works perfectly on its own; you don't need any other Fluent 
 8. Affiliate Payout
 
 == Changelog ==
+
+= 1.6.01 - Aug 10, 2026 =
+- Improved: reCAPTCHA Keys Validated Automatically on Save
+- Fixed: Affiliate Registration and Login Forms
+- Fixed: Affiliate Portal Not Loading With Cookie Consent Blockers
 
 = 1.6.0 - Aug 03, 2026 =
 - Introduced: Captcha Protection on Affiliate Registration
