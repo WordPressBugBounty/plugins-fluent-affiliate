@@ -14,18 +14,27 @@ class BlockEditorHandler
 {
     public function init()
     {
-        add_action('enqueue_block_editor_assets', function () {
-            $app = App::getInstance();
-            $assets = $app['url.assets'];
-
-            $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
+        // The editor canvas is an iframe and WordPress only mirrors assets enqueued on
+        // enqueue_block_assets into it, so the block preview styles cannot ride along
+        // with the editor script on enqueue_block_editor_assets.
+        add_action('enqueue_block_assets', function () {
+            if (!is_admin()) {
+                return;
+            }
 
             Vite::enqueueStyle(
                 'fluent-affiliate/portal-style',
                 'portal_block_css',
                 array(),
-                $assetsVersion
+                Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION
             );
+        });
+
+        add_action('enqueue_block_editor_assets', function () {
+            $app = App::getInstance();
+            $assets = $app['url.assets'];
+
+            $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
 
             Vite::enqueueScript(
                 'fluent-affiliate/portal',
@@ -68,6 +77,10 @@ class BlockEditorHandler
                 'layout'     => [
                     'type'    => 'string',
                     'default' => 'classic',
+                ],
+                'align'      => [
+                    'type' => 'string',
+                    'enum' => ['wide', 'full'],
                 ]
             ]
         ));
@@ -75,10 +88,29 @@ class BlockEditorHandler
 
     public function faRenderPortalBlock($attributes)
     {
-        $layout = Arr::get($attributes, 'layout', 'classic');
+        // Both attributes are attacker-controllable: `align` is not validated by
+        // WordPress (it is only declared via JS block supports) and shortcode
+        // attributes are not an HTML context, so esc_attr() would not stop a `]`
+        // breakout. Map each value to a fixed literal instead of interpolating.
+        $shortcodes = [
+            'classic' => '[fluent_affiliate_portal layout="classic"]',
+            'modern'  => '[fluent_affiliate_portal layout="modern"]',
+        ];
 
-        $output = '<div class="fluent-affiliate-portal-block align' . Arr::get($attributes, 'align') . '">';
-        $output .= do_shortcode("[fluent_affiliate_portal layout=$layout]");
+        $layout = Arr::get($attributes, 'layout', 'classic');
+        if (!is_string($layout) || !isset($shortcodes[$layout])) {
+            $layout = 'classic';
+        }
+        $shortcode = $shortcodes[$layout];
+
+        $align = Arr::get($attributes, 'align');
+        $classes = 'fluent-affiliate-portal-block';
+        if (in_array($align, ['wide', 'full'], true)) {
+            $classes .= ' align' . $align;
+        }
+
+        $output = '<div class="' . esc_attr($classes) . '">';
+        $output .= do_shortcode($shortcode);
         $output .= '</div>';
 
         return $output;

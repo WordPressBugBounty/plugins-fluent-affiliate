@@ -36,6 +36,7 @@ return array(
     'FluentAffiliate\\App\\Http\\Policies\\PayoutPolicy' => $baseDir . '/app/Http/Policies/PayoutPolicy.php',
     'FluentAffiliate\\App\\Http\\Policies\\ReferralPolicy' => $baseDir . '/app/Http/Policies/ReferralPolicy.php',
     'FluentAffiliate\\App\\Http\\Policies\\ReportPolicy' => $baseDir . '/app/Http/Policies/ReportPolicy.php',
+    'FluentAffiliate\\App\\Http\\Policies\\SuperAdminPolicy' => $baseDir . '/app/Http/Policies/SuperAdminPolicy.php',
     'FluentAffiliate\\App\\Http\\Policies\\UserPolicy' => $baseDir . '/app/Http/Policies/UserPolicy.php',
     'FluentAffiliate\\App\\Http\\Policies\\VisitPolicy' => $baseDir . '/app/Http/Policies/VisitPolicy.php',
     'FluentAffiliate\\App\\Models\\Affiliate' => $baseDir . '/app/Models/Affiliate.php',

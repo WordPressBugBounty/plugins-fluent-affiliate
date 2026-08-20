@@ -2,20 +2,21 @@
 
 namespace FluentAffiliate\App\Http\Policies;
 
-use FluentAffiliate\App\Services\PermissionManager;
 use FluentAffiliate\Framework\Foundation\Policy;
 use FluentAffiliate\Framework\Http\Request\Request;
 
-class ReferralPolicy extends Policy
+class SuperAdminPolicy extends Policy
 {
     /**
-     * Check user permission for any method
+     * Gate for site-level operations. Requires the WordPress manage_options
+     * capability, never the delegable manage_all_data meta flag that
+     * AdminPolicy accepts.
+     *
      * @param Request $request
      * @return Boolean
      */
     public function verifyRequest(Request $request): bool
     {
-        $readAccess = $request->getMethod() === 'GET';
-        return PermissionManager::hasReferralAccess($readAccess);
+        return current_user_can('manage_options');
     }
 }

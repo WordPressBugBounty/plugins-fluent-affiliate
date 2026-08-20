@@ -105,13 +105,16 @@ $router->prefix('settings')->withPolicy('AdminPolicy')->group(function ($router)
     $router->get('/migrations', [MigrationController::class, 'getAvailableMigrations']);
     $router->post('/migrations/start', [MigrationController::class, 'startMigration']);
     $router->get('/migrations/status', [MigrationController::class, 'getPollingStatus']);
-    $router->post('/migrations/wipe', [MigrationController::class, 'wipeCurrentData']);
     $router->get('/migrations/statistics', [MigrationController::class, 'getMigrationStatistics']);
 
     $router->get('/options/affiliates', [SettingController::class, 'getAffiliatesOptions']);
     $router->get('/options/users', [SettingController::class, 'getUsersOptions']);
 
     $router->get('/registration-fields', [SettingController::class, 'getRegistrationFields']);
+});
+
+$router->prefix('settings')->withPolicy('SuperAdminPolicy')->group(function ($router) {
+    $router->post('/migrations/wipe', [MigrationController::class, 'wipeCurrentData']);
 });
 
 // Frontend User Routes

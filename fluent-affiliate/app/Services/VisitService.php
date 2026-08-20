@@ -23,7 +23,124 @@ class VisitService
 
         $affliate->increase('visits');
 
+        if ($visit && !empty($data['ip'])) {
+            self::rememberVisit($affliate->id, $data['ip'], $visit->id);
+            self::countVisitCreation($data['ip']);
+        }
+
         return $visit;
+    }
+
+    /**
+     * Visit tracking is a public, cookie-less endpoint, so the same IP hammering
+     * it would otherwise create an unbounded number of rows and inflate the
+     * affiliate visit counter. Within the dedup window we hand back the visit
+     * row that IP already produced for the same affiliate instead of a new one,
+     * so attribution keeps working while the counter stays honest.
+     *
+     * @param int $affiliateId
+     * @param string $ip
+     * @return \FluentAffiliate\App\Models\Visit|null
+     */
+    public static function getRecentVisit($affiliateId, $ip)
+    {
+        if (!$affiliateId || !$ip || self::dedupWindow() <= 0) {
+            return null;
+        }
+
+        $visitId = (int)get_transient(self::dedupKey($affiliateId, $ip));
+
+        if (!$visitId) {
+            return null;
+        }
+
+        $visit = Visit::find($visitId);
+
+        if (!$visit || $visit->affiliate_id != $affiliateId) {
+            return null;
+        }
+
+        return $visit;
+    }
+
+    /**
+     * @param int $affiliateId
+     * @param string $ip
+     * @param int $visitId
+     * @return void
+     */
+    public static function rememberVisit($affiliateId, $ip, $visitId)
+    {
+        $window = self::dedupWindow();
+
+        if (!$affiliateId || !$ip || !$visitId || $window <= 0) {
+            return;
+        }
+
+        set_transient(self::dedupKey($affiliateId, $ip), (int)$visitId, $window);
+    }
+
+    /**
+     * Backstop against an IP that rotates the affiliate param to sidestep the
+     * per-affiliate dedup. The limit is deliberately far above anything a real
+     * visitor produces, so legitimate attribution is never dropped.
+     *
+     * @param string $ip
+     * @return bool
+     */
+    public static function isVisitFlooding($ip)
+    {
+        if (!$ip) {
+            return false;
+        }
+
+        $limit = (int)apply_filters('fluent_affiliate/visit_flood_limit', 100);
+
+        if ($limit <= 0) {
+            return false;
+        }
+
+        return (int)get_transient(self::floodKey($ip)) >= $limit;
+    }
+
+    /**
+     * @param string $ip
+     * @return void
+     */
+    protected static function countVisitCreation($ip)
+    {
+        $key = self::floodKey($ip);
+
+        set_transient($key, (int)get_transient($key) + 1, HOUR_IN_SECONDS);
+    }
+
+    /**
+     * @return int
+     */
+    protected static function dedupWindow()
+    {
+        $window = (int)apply_filters('fluent_affiliate/visit_dedup_window', 30 * MINUTE_IN_SECONDS);
+
+        return $window > 0 ? $window : 0;
+    }
+
+    /**
+     * @param int $affiliateId
+     * @param string $ip
+     * @return string
+     */
+    protected static function dedupKey($affiliateId, $ip)
+    {
+        return 'fa_visit_dedup_' . md5($affiliateId . '|' . $ip);
+    }
+
+    /**
+     * @param string $ip
+     * @return string
+     */
+    protected static function floodKey($ip)
+    {
+        return 'fa_visit_flood_' . md5($ip);
     }
 
 

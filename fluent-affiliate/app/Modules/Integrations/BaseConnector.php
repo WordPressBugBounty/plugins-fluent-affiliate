@@ -361,7 +361,7 @@ class BaseConnector
             'affiliate_id' => $affiliate->id,
             'customer_id'  => $customer->id,
             'visit_id'     => $visit ? $visit->id : null,
-            'description'  => Arr::get($args, 'description', ''),
+            'description'  => sanitize_text_field(Arr::get($args, 'description', '')),
             'status'       => Arr::get($args, 'status', 'pending'),
             'type'         => Arr::get($args, 'type', 'sale'),
             'amount'       => $commission,

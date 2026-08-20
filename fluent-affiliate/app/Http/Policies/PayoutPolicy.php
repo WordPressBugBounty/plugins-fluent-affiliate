@@ -15,7 +15,7 @@ class PayoutPolicy extends Policy
      */
     public function verifyRequest(Request $request): bool
     {
-        $readAccess = $request->method() === 'GET';
+        $readAccess = $request->getMethod() === 'GET';
 
         return PermissionManager::hasPayoutAccess($readAccess);
     }

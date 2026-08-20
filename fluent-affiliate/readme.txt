@@ -2,9 +2,9 @@
 Contributors: techjewel, wpmanageninja
 Tags: affiliate program, affiliate management, affiliate marketing, wp affiliate
 Requires at least: 6.0
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.6.01
+Stable tag: 1.6.5
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -212,6 +212,14 @@ No, FluentAffiliate works perfectly on its own; you don't need any other Fluent 
 8. Affiliate Payout
 
 == Changelog ==
+
+= 1.6.5 - Aug 20, 2026 =
+- Added: Filters for Signup Roles and Reserved Field Names
+- Improved: License Management with Plan, Expiry and Renewal Alerts
+- Improved: Custom Conversion Referrals Now Await Admin Approval
+- Improved: Visit Deduplication and Per-IP Flood Limits
+- Updated: Licensing Engine With Signed Update Package Verification
+- Security: Hardened Permissions, Registration, Tracking and Output Escaping
 
 = 1.6.01 - Aug 10, 2026 =
 - Improved: reCAPTCHA Keys Validated Automatically on Save

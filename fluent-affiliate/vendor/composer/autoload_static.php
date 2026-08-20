@@ -68,6 +68,7 @@ class ComposerStaticInitf63c2ed6b044dde5698ce6b3a50c2221
         'FluentAffiliate\\App\\Http\\Policies\\PayoutPolicy' => __DIR__ . '/../..' . '/app/Http/Policies/PayoutPolicy.php',
         'FluentAffiliate\\App\\Http\\Policies\\ReferralPolicy' => __DIR__ . '/../..' . '/app/Http/Policies/ReferralPolicy.php',
         'FluentAffiliate\\App\\Http\\Policies\\ReportPolicy' => __DIR__ . '/../..' . '/app/Http/Policies/ReportPolicy.php',
+        'FluentAffiliate\\App\\Http\\Policies\\SuperAdminPolicy' => __DIR__ . '/../..' . '/app/Http/Policies/SuperAdminPolicy.php',
         'FluentAffiliate\\App\\Http\\Policies\\UserPolicy' => __DIR__ . '/../..' . '/app/Http/Policies/UserPolicy.php',
         'FluentAffiliate\\App\\Http\\Policies\\VisitPolicy' => __DIR__ . '/../..' . '/app/Http/Policies/VisitPolicy.php',
         'FluentAffiliate\\App\\Models\\Affiliate' => __DIR__ . '/../..' . '/app/Models/Affiliate.php',

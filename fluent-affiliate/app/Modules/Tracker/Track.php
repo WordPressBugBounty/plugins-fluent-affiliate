@@ -102,6 +102,8 @@ class Track
             ]);
         }
 
+        $ip = VisitService::getIp();
+
         $visit = null;
         if (!empty($data['visit_id'])) {
             $exisitngVisit = Visit::find($data['visit_id']);
@@ -111,6 +113,20 @@ class Track
         }
 
         if (!$visit) {
+            // This endpoint is public and cookie-less by design, so the same IP can
+            // replay it at will. Reuse the visit this IP already logged for this
+            // affiliate instead of stacking rows and inflating the visit counter.
+            $visit = VisitService::getRecentVisit($affiliate->id, $ip);
+        }
+
+        if (!$visit) {
+            if (VisitService::isVisitFlooding($ip)) {
+                wp_send_json([
+                    'message' => 'throttled',
+                    'time'    => time()
+                ]);
+            }
+
             $visit = [
                 'affiliate_id' => $affiliate->id,
                 'user_id'      => get_current_user_id(),
@@ -119,7 +135,7 @@ class Track
                 'utm_source'   => substr(Arr::get($data, 'utm_source', ''), 0, 100),
                 'utm_medium'   => substr(Arr::get($data, 'utm_medium', ''), 0, 100),
                 'utm_campaign' => substr(Arr::get($data, 'utm_campaign', ''), 0, 100),
-                'ip'           => VisitService::getIp(),
+                'ip'           => $ip,
             ];
 
             $visit = VisitService::addVisit($affiliate, $visit);

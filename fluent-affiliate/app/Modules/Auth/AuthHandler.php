@@ -62,7 +62,7 @@ class AuthHandler
             ], 422);
         }
 
-        $rateLimit = AuthHelper::isAuthRateLimit();
+        $rateLimit = AuthHelper::isAuthRateLimit($data['log']);
         if (is_wp_error($rateLimit)) {
             wp_send_json([
                 'message' => $rateLimit->get_error_message()
@@ -72,8 +72,9 @@ class AuthHandler
         $user = wp_authenticate($data['log'], $data['pwd']);
 
         if (is_wp_error($user)) {
+            // Generic message: do not reveal whether the username exists.
             wp_send_json([
-                'message' => $user->get_error_message()
+                'message' => __('Invalid username or password.', 'fluent-affiliate')
             ], 422);
         }
 
@@ -280,7 +281,7 @@ class AuthHandler
             $data = array_filter($data);
         }
 
-        $rateLimit = AuthHelper::isAuthRateLimit();
+        $rateLimit = AuthHelper::isAuthRateLimit(Arr::get($data, 'email', ''));
 
         if (is_wp_error($rateLimit)) {
             wp_send_json([

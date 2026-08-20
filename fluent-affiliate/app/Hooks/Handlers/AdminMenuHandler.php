@@ -261,8 +261,9 @@ class AdminMenuHandler
                 'id'          => $currentUser->ID,
                 'full_name'   => trim($currentUser->first_name . ' ' . $currentUser->last_name),
                 'email'       => $currentUser->user_email,
-                'permissions' => PermissionManager::getUserPermissions(),
-                'is_admin'    => PermissionManager::isAdmin()
+                'permissions'   => PermissionManager::getUserPermissions(),
+                'is_admin'      => PermissionManager::isAdmin(),
+                'is_site_admin' => current_user_can('manage_options')
             ],
             'currency'            => $this->getCurrency(),
             'settings_menu_items' => $this->getSettingsMenuItems(),

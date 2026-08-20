@@ -514,20 +514,11 @@ class AuthHelper
             $verifcationCode = str_pad(wp_rand(100123, 900987), 6, 0, STR_PAD_LEFT);
         }
 
-        // Hash the code
-        $codeHash = wp_hash_password($verifcationCode);
-
-        // Create a token with the email and code hash
-        $data = [
-            'email'     => $formData['email'],
-            'code_hash' => $codeHash,
-            'expires'   => time() + 600, // 10 minutes expiry
-        ];
-        $token = base64_encode(json_encode($data));
-
-        // Sign the token
-        $signature   = hash_hmac('sha256', $token, SECURE_AUTH_KEY);
-        $signedToken = $token . '.' . $signature;
+        // The code space is only ~800k values, so the verifier must never reach the
+        // client: a signed-but-readable payload lets an attacker recover the code
+        // offline and defeat the mailbox-ownership check. Keep the hash server side
+        // and hand out an opaque, single-use challenge reference instead.
+        $signedToken = self::createVerificationChallenge($formData['email'], $verifcationCode);
 
         // translators: %s is the site title
         $mailSubject = apply_filters("fluent_affiliate/auth/signup_verification_mail_subject", sprintf(__('Your registration verification code for %s', 'fluent-affiliate'), Arr::get($generalSettings, 'site_title')));
@@ -611,50 +602,131 @@ class AuthHelper
         return ob_get_clean();
     }
 
+    /**
+     * Store the emailed code server side and return only an opaque reference to it.
+     *
+     * @param string $email
+     * @param string $verificationCode
+     * @return string the challenge reference handed to the client
+     */
+    protected static function createVerificationChallenge($email, $verificationCode)
+    {
+        $challengeId = wp_generate_password(40, false, false);
+
+        set_transient(self::verificationChallengeKey($challengeId), [
+            'email'     => self::normalizeEmail($email),
+            'code_hash' => wp_hash_password($verificationCode),
+            'expires'   => time() + 600, // 10 minutes expiry
+            'attempts'  => 0,
+        ], 600);
+
+        return $challengeId;
+    }
+
+    /**
+     * @param string $challengeId
+     * @return string
+     */
+    protected static function verificationChallengeKey($challengeId)
+    {
+        return 'fa_reg_2fa_' . hash('sha256', $challengeId);
+    }
+
+    /**
+     * @param string $email
+     * @return string
+     */
+    protected static function normalizeEmail($email)
+    {
+        return strtolower(trim((string) $email));
+    }
+
     public static function validateVerificationCode($code, $verificationToken, $formData)
     {
-        list($data, $signature) = explode('.', $verificationToken, 2);
-        $expectedSignature      = hash_hmac('sha256', $data, SECURE_AUTH_KEY);
+        $challengeId = is_string($verificationToken) ? trim($verificationToken) : '';
 
-        if (! hash_equals($expectedSignature, $signature)) {
+        if (! $challengeId) {
             return new \WP_Error('invalid_token', __('Invalid verification token. Please try again', 'fluent-affiliate'));
         }
 
-        $data = json_decode(base64_decode($data), true);
-        if ($data['expires'] < time()) {
+        $key       = self::verificationChallengeKey($challengeId);
+        $challenge = get_transient($key);
+
+        if (! $challenge || ! is_array($challenge)) {
+            return new \WP_Error('invalid_token', __('Invalid verification token. Please try again', 'fluent-affiliate'));
+        }
+
+        if (Arr::get($challenge, 'expires', 0) < time()) {
+            delete_transient($key);
             return new \WP_Error('expired_token', __('Verification token has expired. Please try again.', 'fluent-affiliate'));
         }
 
-        if ($data['email'] !== $formData['email']) {
+        if (! hash_equals((string) Arr::get($challenge, 'email'), self::normalizeEmail(Arr::get($formData, 'email')))) {
             return new \WP_Error('invalid_email', __('Invalid email address. Please try again', 'fluent-affiliate'));
         }
 
-        if (! wp_check_password($code, $data['code_hash'])) {
+        $maxAttempts = (int) apply_filters('fluent_affiliate/auth/max_verification_attempts', 5);
+
+        if ((int) Arr::get($challenge, 'attempts', 0) >= $maxAttempts) {
+            delete_transient($key);
+            return new \WP_Error('expired_token', __('Too many incorrect attempts. Please start again.', 'fluent-affiliate'));
+        }
+
+        if (! wp_check_password($code, Arr::get($challenge, 'code_hash'))) {
+            // Count the miss against the challenge, but never extend its lifetime.
+            $challenge['attempts'] = (int) Arr::get($challenge, 'attempts', 0) + 1;
+            set_transient($key, $challenge, max(1, $challenge['expires'] - time()));
+
             return new \WP_Error('invalid_code', __('Invalid verification code. Please try again', 'fluent-affiliate'));
         }
+
+        // Single use: a correct code cannot be replayed into a second registration.
+        delete_transient($key);
 
         return true;
     }
 
-    public static function isAuthRateLimit()
+    /**
+     * The IP bucket alone is resettable: behind a reverse proxy the forwarded-for
+     * header is client supplied, so rotating it hands the caller a fresh throttle
+     * every request. Bucketing on the submitted identity too keeps a brute force
+     * against one account capped no matter how many IPs it claims.
+     *
+     * @param string $identifier email address or login being targeted, when known
+     * @return true|\WP_Error
+     */
+    public static function isAuthRateLimit($identifier = '')
     {
         if (apply_filters('fluent_plugins/auth/disable_rate_limit', false)) {
             return true;
         }
 
-        $transientKey = 'fluent_plugins_auth_rate_limit_' . md5(VisitService::getIp());
-        $rateLimit    = get_transient($transientKey);
+        $buckets = [
+            'fluent_plugins_auth_rate_limit_' . md5(VisitService::getIp())
+        ];
 
-        if (! $rateLimit) {
-            $rateLimit = 0;
+        $identifier = is_string($identifier) ? strtolower(trim($identifier)) : '';
+
+        if ($identifier) {
+            $buckets[] = 'fluent_plugins_auth_id_rate_limit_' . md5($identifier);
         }
 
-        if ($rateLimit >= 10) {
-            return new \WP_Error('rate_limit', __('Too many requests. Please try again later', 'fluent-affiliate'));
+        $counts = [];
+
+        foreach ($buckets as $bucket) {
+            $count = (int) get_transient($bucket);
+
+            if ($count >= 10) {
+                return new \WP_Error('rate_limit', __('Too many requests. Please try again later', 'fluent-affiliate'));
+            }
+
+            $counts[$bucket] = $count;
         }
 
-        $rateLimit = $rateLimit + 1;
-        set_transient($transientKey, $rateLimit, 300); // per 5 minutes
+        foreach ($counts as $bucket => $count) {
+            set_transient($bucket, $count + 1, 300); // per 5 minutes
+        }
+
         return true;
     }
 
@@ -814,8 +886,16 @@ class AuthHelper
             $autoGenerated = true;
         }
 
+        $allowedRoles = apply_filters('fluent_affiliate/allowed_signup_roles', ['subscriber']);
+
+        $requestedRole = Arr::get($userData, 'user_role');
+
+        $role = ($requestedRole && in_array($requestedRole, $allowedRoles, true))
+            ? $requestedRole
+            : get_option('default_role', 'subscriber');
+
         $newUserData = [
-            'role'       => $userData['user_role'],
+            'role'       => $role,
             'user_email' => $email,
             'user_login' => $userData['username'] ?: $email,
             'user_pass'  => $password,
