@@ -7,11 +7,14 @@ use FluentAffiliate\Framework\Http\Request\Request;
 abstract class Policy
 {
     /**
-     * Fallback method even if verifyRequest is not implemented.
-     * @return bool true
+     * Answer for a policy that does not decide itself: deny. A policy
+     * grants access only by overriding this method or the route's method.
+     *
+     * @param  \FluentAffiliate\Framework\Http\Request\Request $request
+     * @return bool
      */
     public function verifyRequest(Request $request)
     {
-        return true;
+        return false;
     }
 }

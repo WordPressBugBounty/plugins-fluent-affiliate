@@ -167,6 +167,13 @@ class Builder
     public $offset;
 
     /**
+     * The page size the paginators use when given none, or one below 1.
+     *
+     * @var int
+     */
+    protected $perPage = 15;
+
+    /**
      * The query union statements.
      *
      * @var array
@@ -305,6 +312,8 @@ class Builder
      */
     public function selectSub($query, $as)
     {
+        $this->grammar->addAlias($as);
+
         [$query, $bindings] = $this->createSub($query);
 
         return $this->selectRaw(
@@ -341,6 +350,8 @@ class Builder
      */
     public function fromSub($query, $as)
     {
+        $this->grammar->addAlias($as);
+
         [$query, $bindings] = $this->createSub($query);
 
         return $this->fromRaw('('.$query.') as '.$this->grammar->wrapTable($as), $bindings);
@@ -481,6 +492,11 @@ class Builder
      */
     public function from($table, $as = null)
     {
+        if (is_string($table) && stripos($table, ' as ') !== false) {
+            [$table, $as] = explode(' as ', $table);
+            $this->grammar->addAlias($as);
+        }
+
         if ($this->isQueryable($table)) {
             return $this->fromSub($table, $as);
         }
@@ -600,6 +616,8 @@ class Builder
      */
     public function joinSub($query, $as, $first, $operator = null, $second = null, $type = 'inner', $where = false)
     {
+        $this->grammar->addAlias($as);
+
         [$query, $bindings] = $this->createSub($query);
 
         $expression = '('.$query.') as '.$this->grammar->wrapTable($as);
@@ -757,6 +775,8 @@ class Builder
      */
     public function crossJoinSub($query, $as)
     {
+        $this->grammar->addAlias($as);
+
         [$query, $bindings] = $this->createSub($query);
 
         $expression = '('.$query.') as '.$this->grammar->wrapTable($as);
@@ -778,6 +798,11 @@ class Builder
      */
     protected function newJoinClause(self $parentQuery, $type, $table)
     {
+        if (stripos($table, ' as ') !== false) {
+            [$_, $as] = explode(' as ', $table);
+            $this->grammar->addAlias($as);
+        }
+        
         return new JoinClause($parentQuery, $type, $table);
     }
 
@@ -1258,6 +1283,38 @@ class Builder
         return $this->whereLike(
             $column, '%'.$value, $caseSensitive, $boolean, $not
         );
+    }
+
+    /**
+     * Add a phonetic "sounds like" (SOUNDEX) clause to the query.
+     *
+     * Matches values pronounced similarly, e.g. searching "heera" matches
+     * "hira"/"hera", "bol" matches "ball", "cloud" matches "claude".
+     *
+     * @param  \FluentAffiliate\Framework\Database\Query\Expression|string  $column
+     * @param  string  $value
+     * @param  string  $boolean
+     * @return $this
+     */
+    public function whereSoundsLike($column, $value, $boolean = 'and')
+    {
+        return $this->whereRaw(
+            $this->grammar->compileSoundsLike($column),
+            [$this->grammar->prepareSoundsLikeBinding($value)],
+            $boolean
+        );
+    }
+
+    /**
+     * Add an "or" phonetic "sounds like" clause to the query.
+     *
+     * @param  \FluentAffiliate\Framework\Database\Query\Expression|string  $column
+     * @param  string  $value
+     * @return $this
+     */
+    public function orWhereSoundsLike($column, $value)
+    {
+        return $this->whereSoundsLike($column, $value, 'or');
     }
 
     /**
@@ -2245,6 +2302,10 @@ class Builder
     {
         $finder = substr($method, 5);
 
+        // Split the method name at each And or Or that starts a new word,
+        // keeping them: 'NameAndEmailOrStatus' -> ['Name', 'And', 'Email',
+        // 'Or', 'Status']. (?=[A-Z]) checks the next letter is a capital
+        // without taking it, so 'OrderIdAndBrand' is not split at 'Or'.
         $segments = preg_split(
             '/(And|Or)(?=[A-Z])/', $finder, -1, PREG_SPLIT_DELIM_CAPTURE
         );
@@ -2331,6 +2392,48 @@ class Builder
     public function orWhereFullText($columns, $value, array $options = [])
     {
         return $this->whereFulltext($columns, $value, $options, 'or');
+    }
+
+    /**
+     * Add a full-text relevance score to the select clause.
+     *
+     * Compiles a "MATCH ... AGAINST" expression aliased as the given name so
+     * results can be ordered by how well they match. A flat list of columns
+     * produces a single composite match; an associative array of
+     * column => weight produces a weighted per-column sum, e.g.
+     * ['title' => 3, 'body' => 1].
+     *
+     * @param  string|array  $columns
+     * @param  string  $value
+     * @param  array  $options
+     * @param  string  $as
+     * @return $this
+     */
+    public function selectRelevance($columns, $value, array $options = [], $as = 'relevance')
+    {
+        [$sql, $bindings] = $this->grammar->compileRelevance(
+            (array) $columns, $options, $value
+        );
+
+        if (is_null($this->columns)) {
+            $this->select('*');
+        }
+
+        return $this->selectRaw($sql.' as '.$this->grammar->wrap($as), $bindings);
+    }
+
+    /**
+     * Order the query by a previously selected relevance score.
+     *
+     * @param  string  $direction
+     * @param  string  $as
+     * @return $this
+     */
+    public function orderByRelevance($direction = 'desc', $as = 'relevance')
+    {
+        $direction = strtolower($direction) === 'asc' ? 'asc' : 'desc';
+
+        return $this->orderByRaw($this->grammar->wrap($as).' '.$direction);
     }
 
     /**
@@ -2691,13 +2794,29 @@ class Builder
      * Add an "order by" clause to the query.
      *
      * @param  \Closure|\FluentAffiliate\Framework\Database\Orm\Builder|\FluentAffiliate\Framework\Database\Query\Builder|\FluentAffiliate\Framework\Database\Query\Expression|string  $column
-     * @param  string  $direction
+     * @param  string $direction
+     * @param  array  $allowedColumns
      * @return $this
      *
      * @throws \InvalidArgumentException
      */
-    public function orderBy($column, $direction = 'asc')
+    public function orderBy($column, $direction = 'asc', $allowedColumns = [])
     {
+        if (!empty($allowedColumns) && !in_array($column, $allowedColumns, true)) {
+            throw new LogicException(
+                "Ordering by `$column` is not allowed for this query."
+            );
+        }
+
+        // A column given as text must be a column name: letters, digits, _
+        // and ., then an optional JSON path of -> parts ('users.created_at',
+        // 'meta->price', 'meta->items[0]'); 'created_at desc' fails. \z is
+        // the very end, so a trailing newline fails too. A closure, query
+        // or Expression is not text and is used as it is.
+        if (is_string($column) && !preg_match('/^[a-zA-Z0-9_.]+(?:->[\w\-\[\]]+)*\z/', $column)) {
+            throw new LogicException("Invalid column name `$column`.");
+        }
+
         if ($this->isQueryable($column)) {
             [$query, $bindings] = $this->createSub($column);
 
@@ -2709,7 +2828,9 @@ class Builder
         $direction = strtolower($direction);
 
         if (! in_array($direction, ['asc', 'desc'], true)) {
-            throw new InvalidArgumentException('Order direction must be "asc" or "desc".');
+            throw new InvalidArgumentException(
+                'Order direction must be "asc" or "desc".'
+            );
         }
 
         $this->{$this->unions ? 'unionOrders' : 'orders'}[] = [
@@ -2775,7 +2896,9 @@ class Builder
     {
         $type = 'Raw';
 
-        $this->{$this->unions ? 'unionOrders' : 'orders'}[] = compact('type', 'sql');
+        $this->{$this->unions ? 'unionOrders' : 'orders'}[] = compact(
+            'type', 'sql'
+        );
 
         $this->addBinding($bindings, $this->unions ? 'unionOrder' : 'order');
 
@@ -3082,9 +3205,7 @@ class Builder
      */
     public function toRawSql()
     {
-        return $this->grammar->substituteBindingsIntoRawSql(
-            $this->toSql(), $this->connection->prepareBindings($this->getBindings())
-        );
+        return $this->connection->toRawSql($this->toSql(), $this->getBindings());
     }
 
     /**
@@ -3225,7 +3346,7 @@ class Builder
     /**
      * Paginate the given query into a simple paginator.
      *
-     * @param  int  $perPage
+     * @param  int|null|\Closure  $perPage
      * @param  array  $columns
      * @param  string  $pageName
      * @param  int|null  $page
@@ -3233,7 +3354,7 @@ class Builder
      * @return \FluentAffiliate\Framework\Pagination\LengthAwarePaginatorInterface
      */
     public function paginate(
-        $perPage = 15,
+        $perPage = null,
         $columns = ['*'],
         $pageName = 'page',
         $page = null,
@@ -3243,7 +3364,9 @@ class Builder
 
         $total = Helper::value($total) ?? $this->getCountForPagination();
 
-        $perPage = $perPage instanceof Closure ? $perPage($total) : $perPage;
+        $perPage = $this->resolvePerPage(
+            $perPage instanceof Closure ? $perPage($total) : $perPage
+        );
 
         $results = $total
             ? $this->forPage($page, $perPage)->get($columns)
@@ -3260,20 +3383,22 @@ class Builder
      *
      * This is more efficient on larger data-sets, etc.
      *
-     * @param  int  $perPage
+     * @param  int|null  $perPage
      * @param  array  $columns
      * @param  string  $pageName
      * @param  int|null  $page
      * @return \FluentAffiliate\Framework\Pagination\PaginatorInterface
      */
     public function simplePaginate(
-        $perPage = 15,
+        $perPage = null,
         $columns = ['*'],
         $pageName = 'page',
         $page = null
     )
     {
         $page = $page ?: Paginator::resolveCurrentPage($pageName);
+
+        $perPage = $this->resolvePerPage($perPage);
 
         $this->offset(($page - 1) * $perPage)->limit($perPage + 1);
 
@@ -3297,15 +3422,31 @@ class Builder
      * @return \FluentAffiliate\Framework\Pagination\CursorPaginatorInterface
      */
     public function cursorPaginate(
-        $perPage = 15,
+        $perPage = null,
         $columns = ['*'],
         $cursorName = 'cursor',
         $cursor = null
     )
     {
         return $this->paginateUsingCursor(
-            $perPage, $columns, $cursorName, $cursor
+            $this->resolvePerPage($perPage), $columns, $cursorName, $cursor
         );
+    }
+
+    /**
+     * Resolve the page size, falling back to $perPage for anything below 1.
+     *
+     * A negative size would otherwise be dropped by limit() while offset()
+     * still applies, and zero would divide by zero in the paginator.
+     *
+     * @param  mixed  $perPage
+     * @return int
+     */
+    protected function resolvePerPage($perPage)
+    {
+        $perPage = (int) $perPage;
+
+        return $perPage > 0 ? $perPage : $this->perPage;
     }
 
     /**
@@ -3534,6 +3675,9 @@ class Builder
             ? $this->grammar->getValue($column)
             : $column;
 
+        // Keep what follows " as " (any case) or, without an alias, what
+        // follows the last dot: 'users.name as author' -> 'author',
+        // 'users.email' -> 'email'.
         $separator = str_contains(strtolower($columnString), ' as ') ? ' as ' : '\.';
 
         return Helper::last(preg_split('~'.$separator.'~i', $columnString));

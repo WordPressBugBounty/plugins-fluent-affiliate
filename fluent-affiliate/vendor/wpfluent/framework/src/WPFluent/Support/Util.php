@@ -2,6 +2,8 @@
 
 namespace FluentAffiliate\Framework\Support;
 
+use RuntimeException;
+
 class Util
 {
 	/**
@@ -40,11 +42,11 @@ class Util
 	 * @param  string $filePath
 	 * @return string
 	 */
-	public static function pathToUrl($filePath = '')
-    {
-        if (!file_exists($filePath)) {
-            throw new \RuntimeException("File does not exist: {$filePath}");
-        }
+	public static function pathToUrl($filePath = '', $checkFile = false)
+	{
+	    if ($checkFile && !file_exists($filePath)) {
+	        throw new RuntimeException("File does not exist: {$filePath}");
+	    }
 
         $url = str_replace(
             wp_normalize_path(untrailingslashit(ABSPATH)),
@@ -54,15 +56,4 @@ class Util
 
         return esc_url_raw($url);
     }
-
-	/**
-	 * Get the user locale.
-	 * 
-	 * @param  int|null $userId
-	 * @return \FluentAffiliate\Framework\Support\Locale
-	 */
-	public static function getLocale($userId = null)
-	{
-		return Locale::init($userId);
-	}
 }

@@ -4,6 +4,7 @@ namespace FluentAffiliate\Framework\Foundation;
 
 use FluentAffiliate\Framework\Foundation\App;
 use FluentAffiliate\Framework\Validator\ValidationException;
+use FluentAffiliate\Framework\Foundation\Exceptions\AuthorizationException;
 
 /**
  * @property \FluentAffiliate\Framework\Http\Request\Request $request
@@ -73,10 +74,8 @@ abstract class RequestGuard
             
             $validator->addError($e->errors());
 
-            $after = $this->afterValidation($validator);
-
             if (!($errors = $validator->errors())) {
-                return;
+                return $this->afterValidation($validator);
             }
 
             $e = new ValidationException(
@@ -85,10 +84,44 @@ abstract class RequestGuard
 
             if ($this->shouldThrowException()) {
                 throw $e;
-            } else {
-                App::make()->doCustomAction('handle_exception', $e);
             }
+
+            App::make()->doCustomAction('handle_exception', $e);
+
+            // A handle_exception listener may answer and end the request.
+            // If none did, stop here instead of running on invalid data.
+            if (wp_doing_ajax()) {
+                wp_send_json_error([
+                    'message' => $e->getMessage(),
+                    'errors'  => $e->errors(),
+                ], 422);
+            }
+
+            throw $e;
         }
+    }
+
+    /**
+     * Refuse the request when authorize() returns false.
+     *
+     * In admin-ajax the refusal is answered as JSON with its status, as a
+     * failed validation is; anywhere else it is thrown.
+     *
+     * @return void
+     * @throws \FluentAffiliate\Framework\Foundation\Exceptions\AuthorizationException
+     */
+    public function failedAuthorization()
+    {
+        $e = new AuthorizationException;
+
+        if (wp_doing_ajax() && !$this->isRest()) {
+            wp_send_json_error([
+                'code'    => $e->getErrorCode(),
+                'message' => $e->getMessage(),
+            ], $e->getStatusCode());
+        }
+
+        throw $e;
     }
 
     /**
@@ -99,7 +132,7 @@ abstract class RequestGuard
     protected function shouldThrowException()
     {
         $isTrue = $this->isRest();
-        $isTrue = $isTrue || str_contains('test', App::make()->env());
+        $isTrue = $isTrue || str_contains(App::make()->env(), 'test');
         $isTrue = $isTrue || str_contains(strtolower(php_sapi_name()), 'cli');
         return $isTrue;
     }

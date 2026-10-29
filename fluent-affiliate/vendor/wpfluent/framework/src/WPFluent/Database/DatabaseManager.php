@@ -5,6 +5,9 @@ namespace FluentAffiliate\Framework\Database;
 use BadMethodCallException;
 use FluentAffiliate\Framework\Support\Arr;
 
+/**
+ * @mixin \FluentAffiliate\Framework\Database\Query\WPDBConnection
+ */
 class DatabaseManager
 {
     protected $resolver;

@@ -21,6 +21,7 @@ class Utility
             'rate_type'                => 'percentage',
             'rate'                     => 20,
             'cookie_duration'          => 30,
+            'holding_days'             => 0,
             'referral_format'          => 'id',
             'payout_method'            => 'paypal',
             'number_format'            => 'comma_separated', // or dot_separated
@@ -85,7 +86,10 @@ class Utility
         }
 
         if ($referalFormat == 'username') {
-            return $affiliate->user->user_login ?? null;
+            $login = $affiliate->user->user_login ?? null;
+
+            // an all-digit login reads as an affiliate id, so link by the id instead
+            return ($login && ctype_digit($login)) ? $affiliate->id : $login;
         }
 
         return null;
@@ -133,17 +137,19 @@ class Utility
         if ($referalFormat == 'id') {
             $affiliate = Affiliate::find($paramId);
         } else if ($referalFormat == 'username') {
-            $affiliate = self::getAffiliateByUserLogin($paramId);
+            // an all-digit value is an affiliate id first, so a user who registers
+            // the login 1042 cannot take over the links of affiliate 1042
+            if (ctype_digit((string) $paramId)) {
+                $affiliate = Affiliate::find((int) $paramId);
+            }
+
+            $affiliate = $affiliate ?: self::getAffiliateByUserLogin($paramId);
         }
 
         // links shared and cookies written before referral_format was changed
         // carry the other format, so resolve those instead of losing the referral
-        if (! $affiliate) {
-            if ($referalFormat == 'id' && ! is_numeric($paramId)) {
-                $affiliate = self::getAffiliateByUserLogin($paramId);
-            } else if ($referalFormat == 'username' && is_numeric($paramId)) {
-                $affiliate = Affiliate::find((int) $paramId);
-            }
+        if (! $affiliate && $referalFormat == 'id' && ! is_numeric($paramId)) {
+            $affiliate = self::getAffiliateByUserLogin($paramId);
         }
 
         return apply_filters('fluent_affiliate/affiliate_by_param', $affiliate, $paramId);
@@ -497,5 +503,66 @@ class Utility
     {
         $rtl = apply_filters('fluent_affiliate/is_rtl', is_rtl());
         return $rtl;
+    }
+
+    // Formats a stored (site-local) date with the WordPress date/time format settings.
+    public static function formatDate($date, $withTime = true)
+    {
+        if (!$date) {
+            return '';
+        }
+
+        $format = get_option('date_format') ?: 'F j, Y';
+        if ($withTime) {
+            $format .= ' ' . (get_option('time_format') ?: 'g:i a');
+        }
+
+        // Read the wall-clock value so date_i18n() prints the stored local time as-is.
+        $timestamp = strtotime($date instanceof \DateTimeInterface ? $date->format('Y-m-d H:i:s') : (string) $date);
+
+        return $timestamp ? date_i18n($format, $timestamp) : '';
+    }
+
+    // Converts a PHP date format (e.g. "d/m/Y") to dayjs (e.g. "DD/MM/YYYY") for the Vue apps.
+    public static function toDayjsFormat($phpFormat, $fallback = 'YYYY-MM-DD')
+    {
+        $map = [
+            'd' => 'DD', 'D' => 'ddd', 'j' => 'D', 'l' => 'dddd', 'w' => 'd',
+            'F' => 'MMMM', 'm' => 'MM', 'M' => 'MMM', 'n' => 'M',
+            'Y' => 'YYYY', 'y' => 'YY',
+            'a' => 'a', 'A' => 'A', 'g' => 'h', 'G' => 'H', 'h' => 'hh', 'H' => 'HH', 'i' => 'mm', 's' => 'ss'
+        ];
+
+        $dayjsFormat = '';
+        $chars = preg_split('//u', (string) $phpFormat, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $length = count($chars);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $chars[$i];
+
+            // PHP escapes literals with a backslash, dayjs with square brackets.
+            if ($char === '\\') {
+                $i++;
+                $dayjsFormat .= $i < $length ? '[' . $chars[$i] . ']' : '';
+                continue;
+            }
+
+            // dayjs only has an ordinal for the day of month ("Do"), so "jS"/"dS" become "Do".
+            if ($char === 'S') {
+                $prev = $i > 0 ? $chars[$i - 1] : '';
+                if ($prev === 'j' || $prev === 'd') {
+                    $dayjsFormat = substr($dayjsFormat, 0, -strlen($map[$prev])) . 'Do';
+                }
+                continue;
+            }
+
+            if (isset($map[$char])) {
+                $dayjsFormat .= $map[$char];
+            } elseif (!preg_match('/^[a-zA-Z]$/', $char)) {
+                $dayjsFormat .= $char;
+            }
+        }
+
+        return trim($dayjsFormat) !== '' ? $dayjsFormat : $fallback;
     }
 }

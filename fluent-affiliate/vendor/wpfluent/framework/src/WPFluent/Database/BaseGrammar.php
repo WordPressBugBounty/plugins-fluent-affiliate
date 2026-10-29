@@ -142,6 +142,10 @@ abstract class BaseGrammar
      */
     protected function resolveTablePrefix($table)
     {
+        if ($this->isAliasedTable($table)) {
+            return '';
+        }
+        
         if (!is_multisite()) {
             return $this->tablePrefix;
         }
@@ -170,6 +174,8 @@ abstract class BaseGrammar
      */
     protected function wrapAliasedValue($value)
     {
+        // Split around the word "as", in any case, with spaces on both
+        // sides: 'users.name as author' -> ['users.name', 'author'].
         $segments = preg_split('/\s+as\s+/i', $value);
 
         return $this->wrap(
@@ -185,9 +191,9 @@ abstract class BaseGrammar
      */
     protected function wrapAliasedTable($value)
     {
+        // Split around the word "as", in any case, with spaces on both
+        // sides: 'users.name as author' -> ['users.name', 'author'].
         $segments = preg_split('/\s+as\s+/i', $value);
-
-        $tablePrefix = $this->resolveTablePrefix($segments[0]);
 
         $this->alias[] = $alias = $this->wrapValue($segments[1]);
 
@@ -390,5 +396,15 @@ abstract class BaseGrammar
         $this->connection = $connection;
 
         return $this;
+    }
+
+    /**
+     * Track table aliases.
+     * 
+     * @param void
+     */
+    public function addAlias($alias)
+    {
+        $this->alias[] = "`$alias`";
     }
 }

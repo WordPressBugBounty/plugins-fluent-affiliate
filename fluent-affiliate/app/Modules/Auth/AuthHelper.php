@@ -229,7 +229,8 @@ class AuthHelper
                 'placeholder'       => __('Password', 'fluent-affiliate'),
                 'label'             => __('Account Password', 'fluent-affiliate'),
                 'required'          => $user ? 'no' : 'yes',
-                'sanitize_callback' => 'sanitize_text_field',
+                // kept as typed, like WordPress core: a password is only ever hashed
+                'sanitize_callback' => '',
                 'system_defined'    => 'yes',
                 'is_hidden'         => 'no',
                 'disable_alter'     => 'yes',
@@ -242,7 +243,7 @@ class AuthHelper
                 'placeholder'       => __('Password Confirmation', 'fluent-affiliate'),
                 'label'             => __('Re-type Account Password', 'fluent-affiliate'),
                 'required'          => $user ? 'no' : 'yes',
-                'sanitize_callback' => 'sanitize_text_field',
+                'sanitize_callback' => '',
                 'system_defined'    => 'yes',
                 'is_hidden'         => 'no',
                 'disable_alter'     => 'yes',
@@ -372,6 +373,12 @@ class AuthHelper
 
             $defaultValues = Arr::only($defaultItem, $keys);
             $saved = wp_parse_args($saved, $defaultValues);
+
+            // a built-in field always keeps its own sanitizer, whatever was saved
+            if (isset($defaultItem['sanitize_callback'])) {
+                $saved['sanitize_callback'] = $defaultItem['sanitize_callback'];
+            }
+
             $formattedItems[] = $saved;
         }
 
@@ -406,6 +413,36 @@ class AuthHelper
         }
 
         return $fields;
+    }
+
+    /**
+     * A field's sanitize_callback is read back from saved settings, so the name is
+     * never called as given. It only selects one of the known sanitizers.
+     *
+     * @param array $field
+     * @return string|null null when the field declares no sanitizer
+     */
+    public static function getFieldSanitizer($field)
+    {
+        $callback = is_array($field) ? Arr::get($field, 'sanitize_callback') : null;
+
+        if (!$callback) {
+            return null;
+        }
+
+        $allowed = apply_filters('fluent_affiliate/auth/allowed_sanitize_callbacks', [
+            'sanitize_text_field',
+            'sanitize_textarea_field',
+            'sanitize_email',
+            'sanitize_url',
+            'sanitize_user',
+        ]);
+
+        if (is_string($callback) && in_array($callback, (array) $allowed, true)) {
+            return $callback;
+        }
+
+        return 'sanitize_text_field';
     }
 
     public static function getValidationRules($user = null, $scope = 'view')
@@ -672,11 +709,12 @@ class AuthHelper
             return new \WP_Error('expired_token', __('Too many incorrect attempts. Please start again.', 'fluent-affiliate'));
         }
 
-        if (! wp_check_password($code, Arr::get($challenge, 'code_hash'))) {
-            // Count the miss against the challenge, but never extend its lifetime.
-            $challenge['attempts'] = (int) Arr::get($challenge, 'attempts', 0) + 1;
-            set_transient($key, $challenge, max(1, $challenge['expires'] - time()));
+        // Count the attempt before the slow hash check, so requests sent together
+        // cannot all be verified against the same count. Never extends the lifetime.
+        $challenge['attempts'] = (int) Arr::get($challenge, 'attempts', 0) + 1;
+        set_transient($key, $challenge, max(1, $challenge['expires'] - time()));
 
+        if (! wp_check_password($code, Arr::get($challenge, 'code_hash'))) {
             return new \WP_Error('invalid_code', __('Invalid verification code. Please try again', 'fluent-affiliate'));
         }
 
@@ -849,13 +887,7 @@ class AuthHelper
 
         $user = get_user_by('login', $userName);
 
-        if ($user) {
-            if ($targetUserId && $user->ID != $targetUserId) {
-                return false;
-            }
-        }
-
-        return true;
+        return !$user || ($targetUserId && $user->ID == $targetUserId);
     }
 
     public static function isAutoApproveAffiliates()

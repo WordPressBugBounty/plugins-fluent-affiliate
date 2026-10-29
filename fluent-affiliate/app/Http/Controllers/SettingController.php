@@ -254,7 +254,16 @@ class SettingController extends Controller
     public function createPage(Request $request)
     {
         $title = $request->getSafe('title', 'sanitize_text_field');
-        $content = $request->getSafe('content', 'wp_kses_post');
+
+        if (!$title) {
+            return $this->sendError([
+                'message' => __('Page title is required', 'fluent-affiliate')
+            ]);
+        }
+
+        // The page only ever hosts the affiliate portal, so its content is set
+        // here and never taken from the request.
+        $content = '<!-- wp:fluent-affiliate/portal {"layout":"modern"} /-->';
 
         $page = get_page_by_path($title);
 
@@ -269,7 +278,13 @@ class SettingController extends Controller
             'post_content' => $content,
             'post_type'    => 'page',
             'post_status'  => 'publish'
-        ]);
+        ], true);
+
+        if (is_wp_error($pageId)) {
+            return $this->sendError([
+                'message' => $pageId->get_error_message()
+            ]);
+        }
 
         $page = [
             'id'    => $pageId,
@@ -291,8 +306,10 @@ class SettingController extends Controller
 
         $allPages = $db->table('posts')
             ->when($search, function ($query) use ($search) {
-                return $query->where('post_title', 'LIKE', '%%' . $search . '%%')
-                    ->orWhere('post_name', 'LIKE', '%%' . $search . '%%');
+                return $query->where(function ($q) use ($search) {
+                    $q->where('post_title', 'LIKE', '%%' . $search . '%%')
+                        ->orWhere('post_name', 'LIKE', '%%' . $search . '%%');
+                });
             })
             ->where('post_type', 'page')
             ->where('post_status', 'publish')
@@ -336,12 +353,20 @@ class SettingController extends Controller
             $userQuery->whereDoesntHave('affiliate');
         }
 
+        $canViewUsers = current_user_can('list_users');
+
         $users = $userQuery
-            ->searchBy($search)
+            ->when($canViewUsers, function ($query) use ($search) {
+                return $query->searchBy($search);
+            })
+            ->when(!$canViewUsers && $search, function ($query) use ($search) {
+                return $query->where('display_name', 'like', '%' . $search . '%');
+            })
             ->limit(20)
             ->get();
 
-        $includedIds = array_map('intval', (array)$request->get('include_ids', []));
+        // the picker preloads only its selected users, so the lookup by id is capped
+        $includedIds = array_slice(array_map('intval', (array)$request->get('include_ids', [])), 0, 20);
 
         if ($includedIds) {
             $pushedIds = $users->pluck('ID')->toArray();
@@ -357,8 +382,6 @@ class SettingController extends Controller
         }
 
         $formattedUsers = [];
-
-        $canViewUsers = current_user_can('list_users');
 
         foreach ($users as $user) {
             $formattedUsers[] = [

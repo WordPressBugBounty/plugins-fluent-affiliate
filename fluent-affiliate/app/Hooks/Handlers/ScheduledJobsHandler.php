@@ -24,6 +24,8 @@ class ScheduledJobsHandler
     public function register()
     {
         add_action('fluent_affiliate_scheduled_hour_jobs', [$this, 'reconcileStrandedReferrals']);
+
+        add_action('fluent_affiliate_scheduled_daily_jobs', '__return_null');
     }
 
     /**

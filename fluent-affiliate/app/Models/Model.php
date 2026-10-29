@@ -3,6 +3,7 @@
 namespace FluentAffiliate\App\Models;
 
 use FluentAffiliate\App\App;
+use FluentAffiliate\App\Helper\Helper;
 use FluentAffiliate\Framework\Database\Orm\Model as BaseModel;
 
 class Model extends BaseModel
@@ -12,17 +13,7 @@ class Model extends BaseModel
     public function getPerPage()
     {
         $request = App::make('request')->all();
-        return (isset($request['per_page'])) ? (int)$request['per_page'] : 15;
-    }
-
-    /**
-     * Get a fresh timestamp for the model.
-     *
-     * @return \DateTime
-     */
-    public function freshTimestamp()
-    {
-        return new \DateTime(current_time('mysql'));
+        return (isset($request['per_page'])) ? Helper::clampPerPage($request['per_page']) : 15;
     }
 
     public function getTimezone()

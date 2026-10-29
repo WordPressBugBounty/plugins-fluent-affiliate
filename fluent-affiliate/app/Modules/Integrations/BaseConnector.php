@@ -35,17 +35,25 @@ class BaseConnector
 
     public function addOrUpdateCustomer($data = [])
     {
-        if (!isset($data['user_id'])) {
-            if ($user = get_user_by('user_email', $data['email'])) {
+        if (!isset($data['user_id']) && !empty($data['email'])) {
+            if ($user = get_user_by('email', $data['email'])) {
                 $data['user_id'] = $user->ID;
             }
         }
 
-        $exist = Customer::where('email', $data['email'])
-            ->when(!empty($data['user_id']), function ($query) use ($data) {
-                return $query->orWhere('user_id', $data['user_id']);
-            })
-            ->first();
+        $exist = null;
+
+        // a missing email is not an identity: NULL matches every other email-less customer
+        if (!empty($data['email']) || !empty($data['user_id'])) {
+            $exist = Customer::where(function ($query) use ($data) {
+                if (!empty($data['email'])) {
+                    $query->orWhere('email', $data['email']);
+                }
+                if (!empty($data['user_id'])) {
+                    $query->orWhere('user_id', $data['user_id']);
+                }
+            })->first();
+        }
 
         if ($exist) {
             unset($data['by_affiliate_id']);
@@ -73,10 +81,24 @@ class BaseConnector
     {
         $data = apply_filters('fluent_affiliate/referral_data', $data, $this->provider);
 
+        // Sanitized after the filter: Pro integrations and filter callbacks bypass
+        // createReferralForOrder(), so this is the one write path they all share.
+        if (isset($data['description'])) {
+            $data['description'] = sanitize_text_field($data['description']);
+        }
+
         $amount = Arr::get($data, 'amount', 0);
         $type = Arr::get($data, 'type', 'sale');
 
         if ($amount <= 0 && in_array($type, ['sale', 'recurring_sale', 'lifetime_sale']) && apply_filters('fluent_affiliate/ignore_zero_amount_referral', true, $data)) {
+            return null;
+        }
+
+        // a flat rate ignores the order total, so a free order would still pay the
+        // full commission; the amount check above cannot see that
+        $orderTotal = Arr::get($data, 'order_total');
+
+        if (is_numeric($orderTotal) && $orderTotal <= 0 && in_array($type, ['sale', 'recurring_sale', 'lifetime_sale', 'payment']) && apply_filters('fluent_affiliate/ignore_zero_total_referral', true, $data)) {
             return null;
         }
 
@@ -145,17 +167,20 @@ class BaseConnector
             return $referral;
         }
 
-        $formattedOrderData = [
-            'subtotal' => $this->centsToDecimal($order->subtotal, $order->currency),
-            'tax'      => $this->centsToDecimal($order->tax_total, $order->currency),
-            'discount' => $this->centsToDecimal($this->getOrderDiscountTotal($order), $order->currency),
-            'shipping' => $this->centsToDecimal($order->shipping_total, $order->currency),
-        ];
-
-        $totalRefund = $this->centsToDecimal($order->total_refund, $order->currency);
+        // the refund is a gross amount, so the base loses the same share of the order
+        // rather than the raw refund, which would take tax and shipping off it too
+        $refundRatio = $order->total_amount > 0 ? min(1, $order->total_refund / $order->total_amount) : 0;
 
         $currentOrderTotal = $referral->order_total;
-        $updatedOrderTotal = $this->calculateOrderTotal($formattedOrderData) - $totalRefund;
+        $baseTotal = $this->calculateOrderTotal($this->getOrderTotals($order));
+
+        // zero-decimal referrals recorded before hundredthsToDecimal() keep a 100x order_total;
+        // normalize it here, so the save below stores the new unit and later refunds never re-guess it
+        if ($this->isZeroDecimalCurrency($order->currency) && $currentOrderTotal > $baseTotal * 10) {
+            $currentOrderTotal /= 100;
+        }
+
+        $updatedOrderTotal = round($baseTotal * (1 - $refundRatio), 2);
 
         // a fully discounted order stores order_total 0 with a fixed rate commission,
         // and there is no original total to reduce the commission in proportion to
@@ -176,6 +201,21 @@ class BaseConnector
         do_action('fluent_affiliate/referral_commission_updated', $referral);
 
         return $referral;
+    }
+
+    /**
+     * Order level totals in decimal, shaped for calculateOrderTotal().
+     *
+     * @return array subtotal, tax, discount, shipping
+     */
+    protected function getOrderTotals($order)
+    {
+        return [
+            'subtotal' => $this->hundredthsToDecimal($order->subtotal),
+            'tax'      => $this->hundredthsToDecimal($order->tax_total),
+            'discount' => $this->hundredthsToDecimal($this->getOrderDiscountTotal($order)),
+            'shipping' => $this->hundredthsToDecimal($order->shipping_total),
+        ];
     }
 
     /**
@@ -220,7 +260,8 @@ class BaseConnector
         $email = Arr::get($customerData, 'email', '');
         $affiliateEmail = $affiliate->user ? $affiliate->user->user_email : '';
 
-        if ($email && ($email == $affiliate->payment_email || $email == $affiliateEmail)) {
+        // emails are case-insensitive, so John@Example.com is the same buyer as john@example.com
+        if ($email && (!strcasecmp($email, (string) $affiliate->payment_email) || !strcasecmp($email, $affiliateEmail))) {
             return true;
         }
 
@@ -259,17 +300,33 @@ class BaseConnector
         return max(0, $total);
     }
 
+    /**
+     * For providers that store every amount as hundredths of the major unit,
+     * whatever the currency: FluentCart and FluentBooking keep JPY 5000 as 500000.
+     */
+    public function hundredthsToDecimal($amount)
+    {
+        return number_format($amount / 100, 2, '.', '');
+    }
+
+    /**
+     * For providers that store the currency's own smallest unit, as Stripe does,
+     * where a zero-decimal currency such as JPY is already in whole units.
+     */
     public function centsToDecimal($cents, $currency = '')
     {
-        $zeroDecimalCurrencies = ['BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'];
-
-        $currency = strtoupper($currency);
-
-        if (in_array($currency, $zeroDecimalCurrencies)) {
+        if ($this->isZeroDecimalCurrency($currency)) {
             return $cents;
         }
 
         return number_format($cents / 100, 2, '.', '');
+    }
+
+    protected function isZeroDecimalCurrency($currency)
+    {
+        $zeroDecimalCurrencies = ['BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'];
+
+        return in_array(strtoupper((string) $currency), $zeroDecimalCurrencies);
     }
 
     function getPostTermsMaps($postIds, $taxonomy)
@@ -458,6 +515,9 @@ class BaseConnector
             $byRulesCommissionTotal += $this->calculateCustomCommission($itemTotal, $rateConfig);
             $referralOrderTotal -= $itemTotal;
         }
+
+        // round once, so float residue such as 7.1e-15 never reads as an uncovered remainder
+        $referralOrderTotal = round($referralOrderTotal, 2);
 
         if ($referralOrderTotal <= 0) {
             return $byRulesCommissionTotal;

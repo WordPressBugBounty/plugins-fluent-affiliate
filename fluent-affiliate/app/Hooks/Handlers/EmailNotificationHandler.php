@@ -34,8 +34,8 @@ class EmailNotificationHandler
             'user'      => $affiliate->user
         ];
 
-        // let's send the email to the affiliate
-        if ($affiliate->status === 'pending') {
+        // let's send the email to the affiliate (an imported applicant can have no user)
+        if ($affiliate->status === 'pending' && $affiliate->user) {
             $toAffiliate = EmailNotificationSettings::getEmailSetting('pending_account_created_to_affiliate');
 
             if ($toAffiliate) {
@@ -88,6 +88,10 @@ class EmailNotificationHandler
         }
 
         $user = $affiliate->user;
+
+        if (!$user) {
+            return;
+        }
 
         $contextData = [
             'affiliate' => $affiliate,

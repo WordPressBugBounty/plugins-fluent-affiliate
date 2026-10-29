@@ -36,7 +36,7 @@ class ValidationData
 
         $data = static::extractDataFromPath($explicitPath, $masterData);
 
-        if (mb_strpos($attribute, '*') !== false || substr($attribute, -1) === '*') {
+        if (mb_strpos($attribute, '*') === false || substr($attribute, -1) === '*') {
             return $data;
         }
 
@@ -56,9 +56,14 @@ class ValidationData
     {
         $keys = [];
 
-        $pattern = str_replace('\*', '[^\.]+', preg_quote($attribute));
+        // Turn the name into a pattern where each '*' stands for one or
+        // more characters without a dot, e.g. 'items.*.name'.
+        $pattern = str_replace('\*', '[^\.]+', preg_quote($attribute, '/'));
 
         foreach ($data as $key => $value) {
+            // Keep the start of each key that fits the pattern:
+            // 'items.0.name.first' -> 'items.0.name'. Only the start is
+            // anchored (^), so 'items.0.names' gives 'items.0.name' too.
             if ((bool) preg_match('/^'.$pattern.'/', $key, $matches)) {
                 $keys[] = $matches[0];
             }

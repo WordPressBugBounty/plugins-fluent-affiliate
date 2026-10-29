@@ -174,9 +174,8 @@ class Path
      */
     public static function basename($path, $suffix = null)
     {
-        $baseName = basename($path);
-
-        return $suffix ? rtrim($baseName, $suffix) : $baseName;
+        // PHP removes the suffix itself, not the characters it contains.
+        return basename($path, (string) $suffix);
     }
 
     /**

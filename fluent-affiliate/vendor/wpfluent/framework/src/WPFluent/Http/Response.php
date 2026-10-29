@@ -87,34 +87,63 @@ class Response implements \JsonSerializable
     }
 
     /**
-     * Throw an exception based on the response status code.
+     * Throw WordPress's exception for a 4xx or 5xx status, or when the
+     * request got no answer: such as \WpOrg\Requests\Exception\Http\Status404, or
+     * StatusUnknown for a status WordPress has no class for. The exception
+     * carries the response: $e->getData() is the Requests response, with its
+     * status_code, headers and body.
      *
-     * @throws \WpOrg\Requests\Exception
+     * @return $this The response, when its status is below 400.
+     *
+     * @throws \WpOrg\Requests\Exception\Http
      */
     public function throw()
     {
-        $class = sprintf(
-        	'WpOrg\Requests\Exception\Http\Status%d', $this->getCode()
-        );
-        
-        if (!class_exists($class)) {
-            $class = 'WpOrg\Requests\Exception\Http\Status\Http';
+        $failed = is_wp_error($this->response);
+        $code = $failed ? 0 : (int) $this->getCode();
+
+        if ($code > 0 && $code < 400) {
+            return $this;
         }
-        
-        throw new $class;
+
+        // WordPress before 6.2 names the class Requests_Exception_HTTP.
+        $class = class_exists('WpOrg\Requests\Exception\Http')
+            ? \WpOrg\Requests\Exception\Http::get_class($code)
+            : \Requests_Exception_HTTP::get_class($code);
+
+        throw new $class(
+            $failed ? $this->response->get_error_message() : null,
+            $failed ? null : $this->requestsResponse()
+        );
     }
 
     /**
-     * Throw an exception if the given callback returns true.
+     * Throw as throw() does when the condition holds.
      *
-     * @param callable $callback
-     * @return void
+     * @param  bool|callable  $condition  A callable gets the response.
+     * @return $this
+     *
+     * @throws \WpOrg\Requests\Exception\Http
      */
-    public function throwIf(callable $callback)
+    public function throwIf($condition)
     {
-        if ($callback($this)) {
-            return $this->throw();
-        }
+        $holds = is_callable($condition) ? $condition($this) : $condition;
+
+        return $holds ? $this->throw() : $this;
+    }
+
+    /**
+     * The Requests response WordPress's HTTP API was given, if any.
+     *
+     * @return \WpOrg\Requests\Response|\Requests_Response|null
+     */
+    protected function requestsResponse()
+    {
+        $http = is_array($this->response) ? ($this->response['http_response'] ?? null) : null;
+
+        return is_object($http) && method_exists($http, 'get_response_object')
+            ? $http->get_response_object()
+            : null;
     }
 
     /**

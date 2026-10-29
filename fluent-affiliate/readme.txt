@@ -4,7 +4,7 @@ Tags: affiliate program, affiliate management, affiliate marketing, wp affiliate
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.6.5
+Stable tag: 1.7.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -212,6 +212,32 @@ No, FluentAffiliate works perfectly on its own; you don't need any other Fluent 
 8. Affiliate Payout
 
 == Changelog ==
+
+= 1.7.0 - Oct 28, 2026 =
+- Introduced: Send Affiliate Payouts Through PayPal (pro)
+- Introduced: Commission Holding Period
+- Added: PayPal Payouts File Export for Manual Payouts
+- Added: Option to Ignore the Holding Period on a Payout
+- Added: Creatives Migration from Affiliate Manager (pro)
+- Updated: WPFluent Framework to 2.16.0
+- Security: Hardened Permissions, Registration, Integration Feeds, CSV Exports and Output Escaping
+- Fixed: Wrong Commission on Zero-Decimal Currencies in FluentCart and FluentBooking
+- Fixed: FluentCart Tax-Inclusive Commission Including VAT
+- Fixed: Flat Commission Paid on Free Orders
+- Fixed: Default Commission Rate Decimals and Rounding
+- Fixed: Paymattic Coupon and FluentForms Pending Payment Commissions
+- Fixed: Referral Attribution With Inactive Affiliates and Numeric Usernames
+- Fixed: Self-Referral Check on Lifetime Commissions (pro)
+- Fixed: Lifetime Commissions on WooCommerce Orders and Coupon Sales (pro)
+- Fixed: Lost Visit and Referral Counts Under Load
+- Fixed: Payout Accuracy for Inactive Affiliates, Deductions and Deleted Records
+- Fixed: Migration Accuracy for AffiliateWP, Affiliate Manager and Solid Affiliate
+- Fixed: Failed Payouts From Migrations Stuck in Processing
+- Fixed: FluentCRM Automation Actions and Smart Codes
+- Fixed: Signup Altering Passwords and Accepting Taken Usernames
+- Fixed: Scheduled Jobs Not Rescheduling or Failing Without Pro
+- Fixed: Dates Ignoring the Site Date Format and Week Start
+- Fixed: Export Amounts Dropping Trailing Zeros
 
 = 1.6.5 - Aug 20, 2026 =
 - Added: Filters for Signup Roles and Reserved Field Names

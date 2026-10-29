@@ -328,6 +328,31 @@ class Grammar extends BaseGrammar
     }
 
     /**
+     * Compile the SQL for a phonetic "sounds like" (SOUNDEX) comparison.
+     *
+     * Both the column and the bound search term are encoded with the
+     * database engine's native SOUNDEX() function.
+     *
+     * @param  \FluentAffiliate\Framework\Database\Query\Expression|string  $column
+     * @return string
+     */
+    public function compileSoundsLike($column)
+    {
+        return 'soundex('.$this->wrap($column).') = soundex(?)';
+    }
+
+    /**
+     * Prepare the bound value for a "sounds like" comparison.
+     *
+     * @param  string  $value
+     * @return string
+     */
+    public function prepareSoundsLikeBinding($value)
+    {
+        return $value;
+    }
+
+    /**
      * Compile a "where in" clause.
      *
      * @param  \FluentAffiliate\Framework\Database\Query\Builder  $query
@@ -788,6 +813,22 @@ class Grammar extends BaseGrammar
     }
 
     /**
+     * Compile a full-text relevance score expression.
+     *
+     * Returns a [sql, bindings] tuple where the sql is a "MATCH ... AGAINST"
+     * expression with "?" placeholders and bindings are the values for them.
+     *
+     * @param  array  $columns
+     * @param  array  $options
+     * @param  string  $value
+     * @return array
+     */
+    public function compileRelevance($columns, array $options, $value)
+    {
+        throw new RuntimeException('This database engine does not support fulltext relevance ranking.');
+    }
+
+    /**
      * Compile a clause based on an expression.
      *
      * @param  \FluentAffiliate\Framework\Database\Query\Builder  $query
@@ -1081,7 +1122,29 @@ class Grammar extends BaseGrammar
      */
     protected function compileOffset(Builder $query, $offset)
     {
-        return 'offset '.(int) $offset;
+        return $this->compileOffsetAfterLimit($query, $query->limit, $offset);
+    }
+
+    /**
+     * Compile an offset that sits after the given limit.
+     *
+     * MySQL and SQLite both reject an OFFSET with no LIMIT before it, so a
+     * bare offset() gets the largest LIMIT both engines accept.
+     *
+     * @param  \FluentAffiliate\Framework\Database\Query\Builder  $query
+     * @param  int|null  $limit
+     * @param  int  $offset
+     * @return string
+     */
+    protected function compileOffsetAfterLimit(Builder $query, $limit, $offset)
+    {
+        $sql = 'offset '.(int) $offset;
+
+        if (isset($limit)) {
+            return $sql;
+        }
+
+        return $this->compileLimit($query, PHP_INT_MAX).' '.$sql;
     }
 
     /**
@@ -1107,7 +1170,9 @@ class Grammar extends BaseGrammar
         }
 
         if (isset($query->unionOffset)) {
-            $sql .= ' '.$this->compileOffset($query, $query->unionOffset);
+            $sql .= ' '.$this->compileOffsetAfterLimit(
+                $query, $query->unionLimit, $query->unionOffset
+            );
         }
 
         return ltrim($sql);
@@ -1542,6 +1607,9 @@ class Grammar extends BaseGrammar
      */
     protected function removeLeadingBoolean($value)
     {
+        // Remove the first "and " or "or " (any case) in the text, which
+        // here is the one it starts with: 'and `id` = ? or `name` = ?'
+        // becomes '`id` = ? or `name` = ?'.
         return preg_replace('/and |or /i', '', $value, 1);
     }
 

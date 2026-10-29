@@ -28,8 +28,8 @@ class DashboardController extends Controller
         $visitsCount = $hasAccess['visit'] ? Affiliate::where('status', 'active')->sum('visits') : 0;
         $conversionRate = $visitsCount > 0 ? round(($totalReferrals / $visitsCount) * 100, 2) : 0;
         $totalPaid = $hasAccess['payout'] ? Payout::where('status', 'paid')->sum('total_amount') : 0;
-        $unpaidAmount = $hasAccess['payout'] ? Referral::where('status', 'unpaid')->sum('amount') : 0;
-        $totalOrderValue = $hasAccess['referral'] ? Referral::whereIn('status', ['paid', 'unpaid'])->sum('order_total') : 0;
+        $unpaidAmount = $hasAccess['payout'] ? Referral::whereIn('status', ['unpaid', 'processing'])->sum('amount') : 0;
+        $totalOrderValue = $hasAccess['referral'] ? Referral::whereIn('status', ['paid', 'unpaid', 'processing'])->sum('order_total') : 0;
 
         $stats = array_filter([
             'total_paid' => $hasAccess['payout'] ? [
@@ -89,7 +89,7 @@ class DashboardController extends Controller
 
         $recentReferrals = $hasAccess['referral'] ? Referral::query()
             ->orderBy('created_at', 'DESC')
-            ->with(['affiliate.user'])
+            ->with(['affiliate' => Affiliate::identityOnly()])
             ->limit(5)
             ->get() : [];
 
@@ -102,7 +102,7 @@ class DashboardController extends Controller
 
         $recentVisits = $hasAccess['visit'] ? Visit::query()
             ->orderBy('created_at', 'DESC')
-            ->with(['affiliate.user'])
+            ->with(['affiliate' => Affiliate::identityOnly()])
             ->limit(5)
             ->get() : [];
 

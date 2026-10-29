@@ -8,8 +8,15 @@ use FluentAffiliate\App\Models\Referral;
 
 class SmartCodeParser
 {
-    public function parse($templateString, $data)
+    /**
+     * 'html' for an email body, 'text' for a subject
+     */
+    protected $type = 'text';
+
+    public function parse($templateString, $data, $type = 'text')
     {
+        $this->type = $type;
+
         $result = [];
         $isSingle = false;
 
@@ -124,6 +131,12 @@ class SmartCodeParser
                 $value = apply_filters('fluent_affiliate/smartcode_group_callback_' . $dataKey, $matches[0], $valueKey, $defaultValue, $data);
         }
 
+        // user data; photo_html and custom groups return markup on purpose
+        if ($this->type === 'html' && is_string($value) && $valueKey !== 'photo_html'
+            && in_array($dataKey, ['user', 'affiliate', 'transaction', 'referral'], true)) {
+            $value = esc_html($value);
+        }
+
         if ($transformer && is_string($transformer) && $value) {
             switch ($transformer) {
                 case 'trim':
@@ -215,32 +228,48 @@ class SmartCodeParser
         $valueKeys = explode('.', $valueKey);
 
         if (count($valueKeys) == 1) {
-            $value = $wpUser->get($valueKey);
-            if (!$value) {
+            // WP_User::get() reads any users column and any user meta, the password
+            // hash included, so a template only reaches the profile fields
+            $allowedKeys = apply_filters('fluent_affiliate/smartcode_user_allowed_keys', [
+                'ID',
+                'first_name',
+                'last_name',
+                'display_name',
+                'user_email',
+                'user_login',
+                'user_url',
+            ]);
+
+            if (!in_array($valueKey, (array) $allowedKeys, true)) {
                 return $defaultValue;
             }
 
-            if (!is_array($value) || !is_object($value)) {
-                return $value;
+            $value = $wpUser->get($valueKey);
+            if (!$value || !is_scalar($value)) {
+                return $defaultValue;
             }
 
-            return $defaultValue;
+            return $value;
         }
 
         $customKey = $valueKeys[0];
         $customProperty = $valueKeys[1];
 
         if ($customKey == 'meta') {
-            $metaValue = get_user_meta($wpUser->ID, $customProperty, true);
-            if (!$metaValue) {
+            // user meta holds session tokens, application passwords and other
+            // plugins' secrets, so no key is readable until a site opts it in
+            $allowedMetaKeys = apply_filters('fluent_affiliate/smartcode_user_allowed_meta_keys', []);
+
+            if (!in_array($customProperty, (array) $allowedMetaKeys, true)) {
                 return $defaultValue;
             }
 
-            if (!is_array($metaValue) || !is_object($metaValue)) {
-                return $metaValue;
+            $metaValue = get_user_meta($wpUser->ID, $customProperty, true);
+            if (!$metaValue || !is_scalar($metaValue)) {
+                return $defaultValue;
             }
 
-            return $defaultValue;
+            return $metaValue;
         }
 
         return $defaultValue;
@@ -265,7 +294,7 @@ class SmartCodeParser
 
         if ($valueKey == 'earning_total_30_days_formatted') {
             $earningTotal = Referral::query()->where('affiliate_id', $affilieteModel->id)
-                ->whereIn('status', ['paid', 'unpaid'])
+                ->whereIn('status', ['paid', 'unpaid', 'processing'])
                 ->where('created_at', '>=', gmdate('Y-m-d H:i:s', strtotime('-30 days')))
                 ->sum('amount');
 
@@ -296,11 +325,11 @@ class SmartCodeParser
             }
 
             if ($valueKey == 'created_at') {
-                return $affilieteModel->created_at->format('d M Y, H:i');
+                return Utility::formatDate($affilieteModel->created_at);
             }
 
             if ($valueKey == 'updated_at') {
-                return $affilieteModel->updated_at->format('d M Y, H:i');
+                return Utility::formatDate($affilieteModel->updated_at);
             }
 
             if (!is_array($value) && !is_object($value)) {
@@ -324,7 +353,7 @@ class SmartCodeParser
         }
 
         if ($valueKey == 'created_at_formatted') {
-            return $transactionModel->created_at->format('d M Y, H:i');
+            return Utility::formatDate($transactionModel->created_at);
         }
 
         if ($valueKey == 'referrals_count') {
@@ -345,11 +374,11 @@ class SmartCodeParser
             }
 
             if ($valueKey == 'created_at') {
-                return $transactionModel->created_at->format('d M Y, H:i');
+                return Utility::formatDate($transactionModel->created_at);
             }
 
             if ($valueKey == 'updated_at') {
-                return $transactionModel->updated_at->format('d M Y, H:i');
+                return Utility::formatDate($transactionModel->updated_at);
             }
 
             if (!is_array($value) && !is_object($value)) {
@@ -373,7 +402,7 @@ class SmartCodeParser
         }
 
         if ($valueKey == 'created_at_formatted') {
-            return $referralModel->created_at->format('d M Y, H:i');
+            return Utility::formatDate($referralModel->created_at);
         }
 
         $fillables = $referralModel->getFillable();
@@ -389,11 +418,11 @@ class SmartCodeParser
             }
 
             if ($valueKey == 'created_at') {
-                return $referralModel->created_at->format('d M Y, H:i');
+                return Utility::formatDate($referralModel->created_at);
             }
 
             if ($valueKey == 'updated_at') {
-                return $referralModel->updated_at->format('d M Y, H:i');
+                return Utility::formatDate($referralModel->updated_at);
             }
 
             if (!is_array($value) && !is_object($value)) {

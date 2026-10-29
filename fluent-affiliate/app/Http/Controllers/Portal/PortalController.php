@@ -70,13 +70,13 @@ class PortalController extends Controller
         $recentReferrals = Referral::query()
             ->where('affiliate_id', $affiliate->id)
             ->select(['description', 'created_at', 'status', 'amount'])
-            ->whereIn('status', ['paid', 'unpaid', 'rejected'])
+            ->whereIn('status', ['paid', 'unpaid', 'processing', 'rejected'])
             ->orderBy('created_at', 'DESC')
             ->limit(5)
             ->get();
 
         foreach ($recentReferrals as $referral) {
-            $referral->human_date = $referral->created_at->format('d M Y, H:i');
+            $referral->human_date = Utility::formatDate($referral->created_at);
         }
 
         return [
@@ -97,12 +97,14 @@ class PortalController extends Controller
         }
 
         $referrals = Referral::query()->where('affiliate_id', $affiliate->id)
-            ->whereIn('status', ['paid', 'unpaid', 'rejected', 'cancelled'])
+            ->whereIn('status', ['paid', 'unpaid', 'processing', 'rejected', 'cancelled'])
             ->orderBy('id', 'DESC')
             ->paginate();
 
         foreach ($referrals as $referral) {
-            $referral->human_date = $referral->created_at->format('d M Y, H:i');
+            $referral->human_date = Utility::formatDate($referral->created_at);
+            $holdUntil = $referral->getHoldUntil();
+            $referral->hold_until = $holdUntil ? Utility::formatDate($holdUntil, false) : '';
 
             $referral->makeHidden(['affiliate_id', 'customer_id', 'parent_id', 'id', 'order_total', 'payout_id', 'payout_transaction_id', 'products', 'provider', 'provider_id', 'provider_sub_id', 'settings', 'visit_id']);
 
@@ -111,6 +113,26 @@ class PortalController extends Controller
         return [
             'referrals' => $referrals,
         ];
+    }
+
+    /**
+     * True only when PayPal has the payment: the payout went out as a batch, and
+     * PayPal did not fail the item. A row paid by hand after a failure keeps the
+     * failed PayPal status, so it does not show as sent.
+     */
+    protected function isSentViaPayPal(Transaction $transaction)
+    {
+        if ($transaction->payout_method !== 'paypal_payouts' || $transaction->isManual() || $transaction->status === 'failed') {
+            return false;
+        }
+
+        if (!$transaction->payout || empty(Arr::get((array) $transaction->payout->settings, 'payout_batch_id'))) {
+            return false;
+        }
+
+        $paypalStatus = strtoupper((string) Arr::get((array) $transaction->settings, 'paypal_status'));
+
+        return !in_array($paypalStatus, ['FAILED', 'BLOCKED', 'RETURNED'], true);
     }
 
     public function getTransactions(Request $request)
@@ -133,10 +155,11 @@ class PortalController extends Controller
 
         foreach ($transactions as $transaction) {
             $formattedData[] = [
-                'human_date'  => $transaction->created_at->format('d M Y, H:i'),
+                'human_date'  => Utility::formatDate($transaction->created_at),
                 'amount'      => $transaction->total_amount,
                 'status'      => $transaction->status,
                 'description' => $transaction->payout ? $transaction->payout->title : '--',
+                'via_paypal'  => $this->isSentViaPayPal($transaction),
             ];
         }
 
@@ -164,14 +187,14 @@ class PortalController extends Controller
         $visits = Visit::query()->where('affiliate_id', $affiliate->id)
             ->with(['referrals' => function ($query) {
                 $query->select(['id', 'visit_id', 'status', 'amount'])
-                    ->whereIn('status', ['paid', 'unpaid', 'rejected']);
+                    ->whereIn('status', ['paid', 'unpaid', 'processing', 'rejected']);
             }])
             ->select(['id', 'url', 'referrer', 'utm_campaign', 'referral_id', 'utm_medium', 'utm_source', 'created_at'])
             ->orderBy('id', 'DESC')
             ->paginate();
 
         foreach ($visits as $visit) {
-            $visit->human_date = $visit->created_at->format('d M Y, H:i');
+            $visit->human_date = Utility::formatDate($visit->created_at);
 
             $referrals = $visit->referrals;
             $total     = 0;
@@ -213,6 +236,7 @@ class PortalController extends Controller
                     'rows' => 3,
                 ],
                 'label'     => __('Bank Details', 'fluent-affiliate'),
+                'required'  => true,
                 'help_text' => __('Enter your bank account details for payouts.', 'fluent-affiliate'),
             ];
         } else {
@@ -223,6 +247,7 @@ class PortalController extends Controller
                 ],
                 'data_type' => 'email',
                 'label'     => __('Payment Email (PayPal)', 'fluent-affiliate'),
+                'required'  => true,
                 'help_text' => __('This email will be used to send payouts.', 'fluent-affiliate'),
             ];
         }

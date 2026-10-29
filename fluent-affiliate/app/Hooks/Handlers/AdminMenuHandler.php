@@ -6,6 +6,7 @@ use FluentAffiliate\App\App;
 use FluentAffiliate\App\Helper\Helper;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\AffiliateGroup;
+use FluentAffiliate\App\Modules\Auth\AuthHelper;
 use FluentAffiliate\App\Services\PermissionManager;
 use FluentAffiliate\App\Services\TransStrings;
 use FluentAffiliate\App\Vite;
@@ -256,6 +257,9 @@ class AdminMenuHandler
             'brand_logo'          => $this->getMenuIcon(),
             'asset_url'           => $assets,
             'locale'              => get_locale(),
+            'date_format'         => Utility::toDayjsFormat(get_option('date_format')),
+            'time_format'         => Utility::toDayjsFormat(get_option('time_format'), 'h:mm a'),
+            'date_time_format'    => Utility::toDayjsFormat(get_option('date_format') . ' ' . get_option('time_format')),
             'user'                => $this->getCurrentUser(),
             'me'                  => [
                 'id'          => $currentUser->ID,
@@ -275,13 +279,17 @@ class AdminMenuHandler
             'payout_method'       => Utility::getReferralSetting('payout_method', 'paypal'),
             'enable_renewal'      => Utility::getReferralSetting('enable_subscription_renewal', 'no'),
             'enable_lifetime'     => Utility::getReferralSetting('enable_lifetime_commission', 'no'),
+            'holding_days'        => (int) Utility::getReferralSetting('holding_days', 0),
             'has_pro'             => defined('FLUENT_AFFILIATE_PRO_VERSION'),
             'i18n'                => TransStrings::getAdminStrings(),
             'suggested_colors'    => Helper::getSuggestedColors(),
             'upgrade_url'         => Utility::getUpgradeUrl(),
             'is_rtl'              => Utility::isRtl(),
+            'start_of_week'       => (int) get_option('start_of_week', 0),
             'payout_form_schema'  => Helper::getPayoutFormSchema(),
-            'qr_code_settings'    => Arr::get(Utility::getOption('fluent_affiliate_features', []), 'affiliate_qr_code', [])
+            'payout_methods'      => Helper::getPayoutMethods(),
+            'qr_code_settings'    => Arr::get(Utility::getOption('fluent_affiliate_features', []), 'affiliate_qr_code', []),
+            'payment_email_required' => $this->isPaymentEmailRequired()
         ]);
 
         wp_localize_script($this->slug . '_admin_app', 'fluentAffiliateAdmin', $adminScriptVars);
@@ -382,6 +390,17 @@ class AdminMenuHandler
                 'component_type' => 'StandAloneComponent',
                 'route'          => [
                     'name' => 'affiliate_group_settings'
+                ]
+            ],
+            // listed without Pro too, so the screen can show the upgrade notice;
+            // site admins only, because the keys decide who sends payout money
+            'paypal_payouts_settings'  => [
+                'title'          => __('PayPal Payouts', 'fluent-affiliate'),
+                'disable'        => !current_user_can('manage_options'),
+                'svg_icon'       => '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6.5C3 5.67 3.67 5 4.5 5H15.5C16.33 5 17 5.67 17 6.5V14.5C17 15.33 16.33 16 15.5 16H4.5C3.67 16 3 15.33 3 14.5V6.5Z" stroke="currentColor"/><path d="M17 9H13.5C12.67 9 12 9.67 12 10.5C12 11.33 12.67 12 13.5 12H17" stroke="currentColor"/><path d="M5 5L13 3V5" stroke="currentColor"/></svg>',
+                'component_type' => 'StandAloneComponent',
+                'route'          => [
+                    'name' => 'paypal_payouts_settings'
                 ]
             ],
             'affiliate_creatives'      => [
@@ -498,6 +517,14 @@ class AdminMenuHandler
                 ]
             ]
         ]);
+    }
+
+    // mirrors the payment_email rule of AffiliateController::updateAffiliate()
+    protected function isPaymentEmailRequired()
+    {
+        $field = Arr::get(AuthHelper::getRegistrationFormFields(null, 'view', true), 'payment_email');
+
+        return !$field || (Arr::get($field, 'enabled') === 'yes' && Arr::get($field, 'required') === 'yes');
     }
 }
 

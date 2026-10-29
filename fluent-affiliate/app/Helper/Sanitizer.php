@@ -71,11 +71,12 @@ class Sanitizer
         // Convert to string and handle null values
         $value = is_null($value) ? '' : (string)$value;
 
-        $value = sanitize_text_field($value);
+        // not sanitize_text_field(): it drops %xx octets and tags, so URLs and names lose data.
+        // Control characters go, so a leading tab or CR cannot hide a formula and a row stays on one line.
+        $value = trim(preg_replace('/[\x00-\x1F\x7F]+/', ' ', $value));
 
-        if ($value !== '' && strpbrk($value[0], '=+-@') !== false) {
-            $value = "'" . $value;
-        }
+        // Excel in a semicolon locale splits cells on ';', so guard each segment, not only the first
+        $value = preg_replace('/(^|;)(\s*)(?=[=+\-@])/', "$1$2'", $value);
 
         // Escape double quotes by doubling them
         $value = str_replace('"', '""', $value);
@@ -84,5 +85,18 @@ class Sanitizer
             $value = '"' . $value . '"';
         }
         return $value;
+    }
+
+    /**
+     * Money columns are doubles, so 90.90 comes back as 90.9. This keeps two
+     * decimal places, as the admin shows them, and leaves out the thousands separator.
+     */
+    public static function amountForCsv($amount, $decimals = 2, $decimalSeparator = '.')
+    {
+        if (is_null($amount) || $amount === '') {
+            return '';
+        }
+
+        return number_format((float) $amount, $decimals, $decimalSeparator, '');
     }
 }

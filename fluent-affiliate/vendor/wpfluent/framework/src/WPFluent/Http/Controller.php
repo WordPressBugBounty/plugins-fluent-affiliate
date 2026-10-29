@@ -7,6 +7,17 @@ use ReflectionException;
 use FluentAffiliate\Framework\Foundation\App;
 use FluentAffiliate\Framework\Validator\ValidationException;
 
+/**
+ * Base controller — exposes the Application, Request, and Response
+ * via protected properties. The `@property` annotations below are
+ * intentional in addition to the protected declarations: they help
+ * PHPStan disambiguate when a subclass declares a method with the
+ * same name as one of these properties (e.g., `function app()`).
+ *
+ * @property \FluentAffiliate\Framework\Foundation\Application      $app
+ * @property \FluentAffiliate\Framework\Http\Request\Request        $request
+ * @property \FluentAffiliate\Framework\Http\Response\Response      $response
+ */
 abstract class Controller
 {
     /**
@@ -73,6 +84,17 @@ abstract class Controller
             };
 
             $this->app->doCustomAction('handle_exception', $e);
+
+            // A handle_exception listener may answer and end the request.
+            // If none did, stop here instead of running on invalid data.
+            if (wp_doing_ajax()) {
+                wp_send_json_error([
+                    'message' => $e->getMessage(),
+                    'errors'  => $e->errors(),
+                ], 422);
+            }
+
+            throw $e;
         }
     }
 

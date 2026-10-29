@@ -89,8 +89,12 @@ class QueryException extends PDOException
 	 */
 	protected function strReplaceArray($search, array $replace, $subject)
     {
+        // Swap each match for the next value, one at a time. A callback puts
+        // the value in as plain text, so '$1' or '\1' in it stays as it is.
         foreach ($replace as $value) {
-            $subject = preg_replace('/' . $search . '/', $value, $subject, 1);
+            $subject = preg_replace_callback('/' . $search . '/', function () use ($value) {
+                return (string) $value;
+            }, $subject, 1);
         }
 
         return $subject;

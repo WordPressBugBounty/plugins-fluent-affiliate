@@ -19,7 +19,7 @@
  */
 
 add_filter('fluent_affiliate/parse_smart_codes', function ($text, $data, $type = 'text') {
-    return (new \FluentAffiliate\App\Services\Libs\SmartCodeParser())->parse($text, $data);
+    return (new \FluentAffiliate\App\Services\Libs\SmartCodeParser())->parse($text, $data, $type);
 }, 10, 3);
 
 add_filter('wp_plugin_check_ignore_directories', function ($dirs){

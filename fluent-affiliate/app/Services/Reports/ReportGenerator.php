@@ -127,9 +127,10 @@ class ReportGenerator
         ];
 
         if ($frequency === 'P1W') {
-            $select[] = $dbInstance->raw('WEEK(' . $field . ') AS week');
+            // mode 1 starts weeks on Monday, matching formatDate()
+            $select[] = $dbInstance->raw('YEARWEEK(' . $field . ', 1) AS week');
         } elseif ($frequency === 'P1M') {
-            $select[] = $dbInstance->raw('MONTH(' . $field . ') AS month');
+            $select[] = $dbInstance->raw('DATE_FORMAT(' . $field . ", '%Y-%m') AS month");
         }
 
         return $select;

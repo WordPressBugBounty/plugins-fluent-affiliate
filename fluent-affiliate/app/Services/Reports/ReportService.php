@@ -131,6 +131,11 @@ class ReportService
             throw new \InvalidArgumentException('Invalid date format provided.');
         }
 
+        // every period in the range becomes a chart point, so the span is capped
+        if ($start->diff($end)->days > 3660) {
+            throw new \InvalidArgumentException(esc_html__('The date range can be 10 years at most.', 'fluent-affiliate'));
+        }
+
         return [
             'start' => gmdate('Y-m-d', strtotime($startDate)),
             'end'   => gmdate('Y-m-d', strtotime($end->format('Y-m-d')))

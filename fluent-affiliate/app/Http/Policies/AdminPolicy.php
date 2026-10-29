@@ -18,11 +18,19 @@ class AdminPolicy extends Policy
         return PermissionManager::userCan('manage_all_data');
     }
 
+    /**
+     * manage_all_data is a plugin permission that can be delegated, and
+     * publishing a page on the site is a WordPress capability of its own.
+     */
+    public function createPage(Request $request): bool
+    {
+        return $this->verifyRequest($request) && current_user_can('publish_pages');
+    }
+
     public function getUsersOptions(Request $request): bool
     {
-        $hasAccess = PermissionManager::hasAccess();
-
-        return $hasAccess['affiliate'] || $hasAccess['referral'] || $hasAccess['payout'];
+        // only the affiliate form and the manager settings pick WordPress users
+        return PermissionManager::hasAffiliateAccess();
     }
 
     public function getAffiliatesOptions(Request $request): bool

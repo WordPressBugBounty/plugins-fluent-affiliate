@@ -303,22 +303,33 @@ class BootstrapAffiliateRegister extends IntegrationManager
      */
     private function extractAffiliateData(array $processedValues): array
     {
+        $status = Arr::get($processedValues, 'affiliate_status', 'active');
+
+        // anything other than the three feed choices falls back to the site setting
+        if (!in_array($status, ['active', 'pending', 'inactive'], true)) {
+            $status = AuthHelper::getInitialAffiliateStatus();
+        }
+
         return array_filter([
             'rate_type'     => 'default',
             'payment_email' => sanitize_email(Arr::get($processedValues, 'payment_email')),
-            'status'        => Arr::get($processedValues, 'affiliate_status', 'active'),
+            'status'        => $status,
             'note'          => sanitize_textarea_field(Arr::get($processedValues, 'note', ''))
         ]);
     }
 
     /**
-     * Handle user creation or retrieval
+     * Create the user for a submission that came in without one
      */
     private function handleUserCreation(array $userData, $entry, $formId)
     {
-        $existingUser = get_user_by('email', $userData['email']);
-        if ($existingUser) {
-            return $existingUser->ID;
+        // Logged-out submission: the email is unverified, so never bind it to an
+        // existing account.
+        if (get_user_by('email', $userData['email'])) {
+            return new \WP_Error(
+                'existing_user',
+                __('An account already exists for this email. The user has to be logged in to register as an affiliate.', 'fluent-affiliate')
+            );
         }
 
         $userId = AuthHelper::registerUser($userData);

@@ -3,36 +3,42 @@
 namespace FluentAffiliate\Framework\Cache;
 
 use Closure;
-use Throwable;
-use RuntimeException;
-use FluentAffiliate\Framework\Support\Path;
 use FluentAffiliate\Framework\Foundation\App;
 
 class Cache
 {
-    protected static $cacheDir = null;
+    /**
+     * How long "forever" lasts: a transient with no expiry would be loaded
+     * on every page, so it gets a far one instead.
+     */
+    const FOREVER = 5 * YEAR_IN_SECONDS;
 
     /**
-     * Initialize the cache directory.
+     * Whether this request already removed the old cache files.
+     *
+     * @var bool
+     */
+    protected static $filesRemoved = false;
+
+    /**
+     * Get the cache ready and remove the files older versions wrote.
+     *
+     * Values used to be cached in files under uploads, where anyone could
+     * download them; they now live in WordPress transients.
+     *
+     * @param  string|null $cacheDir The old cache folder, if not the default.
+     * @return static
      */
     public static function init($cacheDir = null)
     {
-        if (static::isPersistent()) return;
-
-        static::$cacheDir = static::getDir($cacheDir);
-
-        if (!is_dir(static::$cacheDir) && !mkdir(static::$cacheDir, 0755, true)) {
-            throw new RuntimeException(
-                "Unable to create cache directory: " . static::$cacheDir
-            );
-        }
+        static::removeCacheFiles($cacheDir);
 
         return new static;
     }
 
     /**
-     * Resolve cache directory.
-     * 
+     * The folder older versions kept cache files in.
+     *
      * @param  string|null $cacheDir
      * @return string
      */
@@ -59,9 +65,9 @@ class Cache
 
         if (static::isPersistent()) {
             return wp_cache_set($key, $value, static::cacheGroup(), $ttl);
-        } else {
-            return static::filePut($key, $value, $ttl);
         }
+
+        return static::transientPut($key, $value, $ttl);
     }
 
     /**
@@ -85,13 +91,20 @@ class Cache
      */
     public static function get($key)
     {
+        // Initialize so wp_cache_get's by-reference $found arg doesn't
+        // trigger a PHP 8.1+ "writing to undefined variable" deprecation.
+        $found = null;
+
         $key = static::key($key);
 
         if (static::isPersistent()) {
             $value = wp_cache_get($key, static::cacheGroup(), false, $found);
             $value = $found ? $value : null;
         } else {
-            $value = static::fileGet($key) ?: null;
+            $stored = get_transient($key);
+            $value = is_array($stored) && array_key_exists('value', $stored)
+                ? $stored['value']
+                : null;
         }
 
         return $value;
@@ -111,7 +124,7 @@ class Cache
             return wp_cache_delete($key, static::cacheGroup());
         }
 
-        return static::fileForget($key);
+        return delete_transient($key);
     }
 
     /**
@@ -139,13 +152,16 @@ class Cache
 
         if (static::isPersistent()) {
             return wp_cache_set($key, $value, static::cacheGroup(), 0);
-        } else {
-            return static::filePut($key, $value, 0);
         }
+
+        return static::transientPut($key, $value, static::FOREVER);
     }
 
     /**
-     * Get an item from the cache, or store the default value if not present.
+     * Get an item from the cache, or store what the callback returns.
+     *
+     * A WP_Error is returned without being stored, so the next call tries
+     * again; an exception from the callback reaches the caller.
      *
      * @param  string   $key
      * @param  \Closure $callback
@@ -162,19 +178,18 @@ class Cache
             return $value;
         }
 
-        try {
-            $value = $callback();
-            if (!is_wp_error($value)) {
-                static::set($key, $value, $ttl);
-                return $value;
-            }
-        } catch (Throwable $e) {
-            error_log("Cache callback error [{$key}]: " . $e->getMessage());
+        $value = $callback();
+
+        if (!is_wp_error($value)) {
+            static::set($key, $value, $ttl);
         }
+
+        return $value;
     }
 
     /**
-     * Increment the value of an item in the cache.
+     * Increment the value of an item in the cache, keeping the time it
+     * has left.
      * 
      * @param  string  $key
      * @param  integer $count
@@ -182,17 +197,12 @@ class Cache
      */
     public static function increment($key, $count = 1)
     {
-        $value = static::get($key);
-
-        if (is_numeric($value)) {
-            return static::set($key, $value + $count);
-        }
-
-        return false;
+        return static::adjust($key, $count);
     }
 
     /**
-     * Decrement the value of an item in the cache.
+     * Decrement the value of an item in the cache, keeping the time it
+     * has left.
      * 
      * @param  string  $key
      * @param  integer $count
@@ -200,13 +210,49 @@ class Cache
      */
     public static function decrement($key, $count = 1)
     {
+        return static::adjust($key, -$count);
+    }
+
+    /**
+     * Add $count to a numeric value without changing when it expires.
+     *
+     * An object cache changes a whole number in place, which also keeps two
+     * requests from losing each other's change; a transient is stored again
+     * for the time WordPress says it has left.
+     *
+     * @param  string  $key
+     * @param  int|float  $count
+     * @return bool
+     */
+    protected static function adjust($key, $count)
+    {
         $value = static::get($key);
 
-        if (is_numeric($value)) {
-            return static::set($key, $value - $count);
+        if (!is_numeric($value)) {
+            return false;
         }
 
-        return false;
+        $cacheKey = static::key($key);
+
+        if (!static::isPersistent()) {
+            $expires = (int) get_option('_transient_timeout_' . $cacheKey);
+
+            return static::transientPut(
+                $cacheKey, $value + $count, $expires ? max(1, $expires - time()) : 0
+            );
+        }
+
+        if (filter_var($value, FILTER_VALIDATE_INT) !== false && is_int($count)) {
+            $result = $count < 0
+                ? wp_cache_decr($cacheKey, -$count, static::cacheGroup())
+                : wp_cache_incr($cacheKey, $count, static::cacheGroup());
+
+            return $result !== false;
+        }
+
+        // An object cache doesn't say how long a value has left, so a
+        // number that isn't whole gets the default lifetime.
+        return wp_cache_set($cacheKey, $value + $count, static::cacheGroup(), HOUR_IN_SECONDS);
     }
 
     /**
@@ -237,8 +283,9 @@ class Cache
             return true;
         }
 
-        // For non-persistent cache (e.g., file cache fallback)
-        return static::fileFlush();
+        static::removeCacheFiles();
+
+        return static::transientFlush();
     }
 
     /**
@@ -260,9 +307,26 @@ class Cache
      */
     protected static function key($key)
     {
-        $slug = App::config()->get('app.slug');
-        
-        return $slug . '_wpfluent_cache_' . sanitize_key($key);
+        // Every cache call builds a key, so the old files go on first use,
+        // however the cache is reached.
+        if (!static::$filesRemoved) {
+            static::removeCacheFiles();
+        }
+
+        $key = static::prefix() . sanitize_key($key);
+
+        // A transient name may be at most 172 characters long.
+        return strlen($key) > 172 ? substr($key, 0, 140) . md5($key) : $key;
+    }
+
+    /**
+     * The start every cache key of the plugin shares.
+     *
+     * @return string
+     */
+    protected static function prefix()
+    {
+        return App::config()->get('app.slug') . '_wpfluent_cache_';
     }
 
     /**
@@ -275,107 +339,65 @@ class Cache
         return wp_using_ext_object_cache();
     }
 
-     /**
-     * Store data in a file if no persistent cache is available.
-     *
-     * @param string $key
-     * @param mixed $data
-     * @param int $expiration
-     */
-    protected static function filePut($key, $data, $expiration)
-    {
-        try {
-            return static::store($key, [
-                'data' => $data,
-                'expiration' => time() + $expiration,
-            ]);
-        } catch (Throwable $e) {
-            error_log(__METHOD__ .' - '. $e->getMessage());
-            throw $e;
-        }
-
-    }
-
     /**
-     * Store the data in a file if no persistent cache is available.
-     * 
+     * Store a value in a transient. It is wrapped, so a cached false, 0 or
+     * empty string can be told from a missing key.
+     *
      * @param  string $key
-     * @param  mixed  $payload
+     * @param  mixed  $value
+     * @param  int    $ttl
      * @return bool
      */
-    protected static function store($key, $payload)
+    protected static function transientPut($key, $value, $ttl)
     {
-        if (!static::$cacheDir || !is_readable(static::$cacheDir)) {
-            static::init();
+        if (is_object($value) && method_exists($value, 'toArray')) {
+            $value = $value->toArray();
         }
 
-        $data = $payload['data'];
-
-        if (is_object($data) && method_exists($data, 'toArray')) {
-            $payload['data'] = $data->toArray();
-        }
-
-        $filePath = static::$cacheDir . '/' . md5($key) . '.cache';
-
-        return file_put_contents($filePath, serialize($payload)) !== false;
+        return set_transient($key, ['value' => $value], $ttl > 0 ? $ttl : static::FOREVER);
     }
 
     /**
-     * Retrieve data from the file cache.
-     *
-     * @param string $key
-     * @return mixed|null
-     */
-    protected static function fileGet($key)
-    {
-        $filePath = static::$cacheDir . '/' . md5($key) . '.cache';
-        
-        if (file_exists($filePath)) {
-            $data = unserialize(file_get_contents($filePath));
-            if ($data['expiration'] >= time()) {
-                return $data['data'];
-            }
-            static::fileForget($key);
-        }
-
-        return false;
-    }
-
-    /**
-     * Remove an item from the file cache.
-     *
-     * @param string $key
-     * @return bool
-     */
-    protected static function fileForget($key)
-    {
-        $filePath = static::$cacheDir . '/' . md5($key) . '.cache';
-        
-        if (file_exists($filePath)) {
-            unlink($filePath);
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Flush all file cache entries.
+     * Delete every transient the plugin's cache wrote.
      *
      * @return bool
      */
-    protected static function fileFlush()
+    protected static function transientFlush()
     {
-        if (!is_dir(static::$cacheDir)) {
-            return false;
-        }
+        global $wpdb;
 
-        $files = glob(static::$cacheDir . '/*.cache');
+        $names = $wpdb->get_col($wpdb->prepare(
+            "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
+            $wpdb->esc_like('_transient_' . static::prefix()) . '%'
+        ));
 
-        foreach ($files as $file) {
-            @unlink($file);
+        foreach ($names as $name) {
+            delete_transient(substr($name, strlen('_transient_')));
         }
 
         return true;
+    }
+
+    /**
+     * Delete the cache files older versions wrote, and their folder.
+     *
+     * @param  string|null $cacheDir
+     * @return void
+     */
+    protected static function removeCacheFiles($cacheDir = null)
+    {
+        static::$filesRemoved = true;
+
+        $dir = static::getDir($cacheDir);
+
+        if (!is_dir($dir)) {
+            return;
+        }
+
+        foreach (glob($dir . '/*.cache') ?: [] as $file) {
+            @unlink($file);
+        }
+
+        @rmdir($dir);
     }
 }

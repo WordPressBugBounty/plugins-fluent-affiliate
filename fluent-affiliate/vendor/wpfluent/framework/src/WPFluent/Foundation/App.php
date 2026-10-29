@@ -4,6 +4,16 @@ namespace FluentAffiliate\Framework\Foundation;
 
 use FluentAffiliate\Framework\Container\Contracts\BindingResolutionException;
 
+/**
+ * @method static \FluentAffiliate\Framework\Database\DatabaseManager db()
+ * @method static \FluentAffiliate\Framework\View\View view()
+ * @method static \FluentAffiliate\Framework\Events\Dispatcher events()
+ * @method static \FluentAffiliate\Framework\Foundation\Config config()
+ * @method static \FluentAffiliate\Framework\Http\Request\Request request()
+ * @method static \FluentAffiliate\Framework\Http\Response\Response response()
+ * @method static \FluentAffiliate\Framework\Encryption\Encrypter encrypter()
+ * @method static \FluentAffiliate\Framework\Validator\Validator validator()
+ */
 class App
 {
     /**

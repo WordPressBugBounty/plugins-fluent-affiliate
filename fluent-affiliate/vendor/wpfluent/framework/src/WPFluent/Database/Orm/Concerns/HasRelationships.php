@@ -643,6 +643,9 @@ trait HasRelationships
         // the relationship instances for this relation. This relation will set
         // appropriate query constraints then entirely manage the hydrations.
         if (! $table) {
+            // Split the name at each underscore, keeping the underscores, so
+            // only the last word is made plural: 'post_taggable' gives
+            // ['post', '_', 'taggable'] and the table 'post_taggables'.
             $words = preg_split('/(_)/u', $name, -1, PREG_SPLIT_DELIM_CAPTURE);
 
             $lastWord = array_pop($words);

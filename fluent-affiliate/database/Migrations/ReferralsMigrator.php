@@ -17,6 +17,7 @@ class ReferralsMigrator
         'fa_ref_created'       => '(`created_at`)',
         'fa_ref_payout'        => '(`payout_id`)',
         'fa_ref_parent'        => '(`parent_id`)',
+        'fa_ref_payout_tx'     => '(`payout_transaction_id`, `status`)',
     ];
 
     public static function migrate()
@@ -66,7 +67,8 @@ class ReferralsMigrator
                  INDEX `fa_ref_visit` (`visit_id`),
                  INDEX `fa_ref_created` (`created_at`),
                  INDEX `fa_ref_payout` (`payout_id`),
-                 INDEX `fa_ref_parent` (`parent_id`)
+                 INDEX `fa_ref_parent` (`parent_id`),
+                 INDEX `fa_ref_payout_tx` (`payout_transaction_id`, `status`)
             ) $charsetCollate;";
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
         dbDelta($sql);

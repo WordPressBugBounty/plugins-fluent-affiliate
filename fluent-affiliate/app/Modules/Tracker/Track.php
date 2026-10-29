@@ -76,21 +76,20 @@ class Track
 
         $affiliate = Utility::getAffiliateByParamId($data['affiliate_param']);
 
-        if (!$affiliate) {
+        // one answer for both, so the endpoint does not reveal which logins are affiliates
+        if (!$affiliate || $affiliate->status !== 'active') {
             wp_send_json([
                 'message' => 'invalid aff',
                 'time'    => time()
             ]);
         }
 
-        if ($affiliate->status !== 'active') {
-            wp_send_json([
-                'message' => 'affiliate_inactive',
-                'time'    => time()
-            ]);
-        }
-
         $oldAffiliate = Utility::getCurrentCookieAffiliate();
+
+        // A cookie for an affiliate who is no longer active must not keep later referrers out.
+        if ($oldAffiliate && $oldAffiliate->status !== 'active') {
+            $oldAffiliate = null;
+        }
 
         if (
             ($oldAffiliate && $oldAffiliate->id == $affiliate->id) ||

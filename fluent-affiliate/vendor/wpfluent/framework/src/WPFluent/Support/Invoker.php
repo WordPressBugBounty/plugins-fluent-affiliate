@@ -133,7 +133,10 @@ class Invoker
     {
         $ref = new ReflectionClass($class);
         $prop = $ref->getProperty($property);
-        $prop->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $prop->setAccessible(true);
+        }
+
         return $prop->getValue();
     }
 
@@ -150,7 +153,10 @@ class Invoker
     {
         $ref = new ReflectionClass($class);
         $prop = $ref->getProperty($property);
-        $prop->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $prop->setAccessible(true);
+        }
+
         $prop->setValue(null, $value);
     }
 
@@ -166,7 +172,10 @@ class Invoker
     public static function callStatic($class, $method, $args = [])
     {
         $ref = new ReflectionMethod($class, $method);
-        $ref->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $ref->setAccessible(true);
+        }
+
         return $ref->invokeArgs(null, $args);
     }
 

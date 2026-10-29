@@ -81,7 +81,15 @@ abstract class Facade
         }
 
         if (static::$app) {
-            return static::$resolvedInstance[$name] = static::$app[$name];
+            $instance = static::$app[$name];
+
+            // Keep only a service the container shares. Anything else, like
+            // a Mail message, is built fresh for every call.
+            if (static::$app->isShared(static::$app->getAlias($name))) {
+                static::$resolvedInstance[$name] = $instance;
+            }
+
+            return $instance;
         }
     }
 
@@ -124,6 +132,11 @@ abstract class Facade
      */
     public static function setFacadeApplication($app)
     {
+        // Services kept for another application don't belong to this one.
+        if (static::$app !== $app) {
+            static::$resolvedInstance = [];
+        }
+
         static::$app = $app;
     }
 

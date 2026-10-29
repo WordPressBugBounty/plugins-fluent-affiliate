@@ -5,6 +5,7 @@ namespace FluentAffiliate\Framework\Support;
 use Exception;
 use Traversable;
 use JsonException;
+use RuntimeException;
 use FluentAffiliate\Framework\Foundation\App;
 use FluentAffiliate\Framework\Support\Helper;
 use FluentAffiliate\Framework\Support\Stringable;
@@ -47,8 +48,8 @@ class Str
     }
 
     /**
-     * Makes an acronum from a string of words
-     * 
+     * Makes an acronym from a string of words
+     *
      * @param  string $string
      * @param  string $delimiter
      * @return string
@@ -60,6 +61,9 @@ class Str
         }
      
         $acronym = '';
+        // Split into words at every run of non-letters (spaces, digits,
+        // punctuation); \p{L} is a letter in any language:
+        // 'Fluent-Forms pro' -> ['Fluent', 'Forms', 'pro'].
         foreach (preg_split('/[^\p{L}]+/u', $string) as $word) {
             if(!empty($word)){
                 $first_letter = mb_substr($word, 0, 1);
@@ -238,12 +242,16 @@ class Str
      */
     public static function transliterate($string)
     {
+        // Nothing to do when there is no character other than a plain
+        // letter, digit, underscore or dot: 'file_name.txt' is kept as is.
         if (0 === preg_match('/[^A-Za-z0-9_.]/', $string)) {
             return $string;
         }
 
         $transString = static::ascii($string);
 
+        // Drop every character that is still not a plain letter, digit,
+        // underscore or dot: "Jurgen O'Brien.pdf" -> 'JurgenOBrien.pdf'.
         return preg_replace('/[^A-Za-z0-9_.]/u', '', $transString);
     }
 
@@ -450,6 +458,8 @@ class Str
      */
     public static function deduplicate(string $string, string $character = ' ')
     {
+        // Collapse each run of $character into one: 'a   b  c' -> 'a b c'.
+        // preg_quote() makes characters such as '.' or '*' match literally.
         return preg_replace(
             '/'.preg_quote($character, '/').'+/u', $character, $string
         );
@@ -492,6 +502,8 @@ class Str
     {
         $quoted = preg_quote($cap, '/');
 
+        // Remove every copy of $cap from the end, then add one back:
+        // finish('path///', '/') -> 'path/'.
         return preg_replace('/(?:'.$quoted.')+$/u', '', $value).$cap;
     }
 
@@ -531,6 +543,7 @@ class Str
             // making any string check convenient.
             $pattern = str_replace('\*', '.*', $pattern);
 
+            // The whole value must match: ^ is the start and \z the very end.
             if (preg_match('#^'.$pattern.'\z#u', $value) === 1) {
                 return true;
             }
@@ -540,8 +553,9 @@ class Str
     }
 
     /**
-     * Converts a non-boolean value to boolean
-     * @param  string|int $str
+     * Converts a non-boolean value to boolean (case-insensitive).
+     * Returns null when the value is not a recognized boolean word.
+     * @param  string|int|bool $str
      * @return bool|null
      */
     public static function toBool($str)
@@ -549,7 +563,11 @@ class Str
         if (is_bool($str)) {
             return $str;
         }
-      
+
+        if (is_string($str)) {
+            $str = strtolower(trim($str));
+        }
+
         $truthy = ['yes', 'on', 'true', '1', 1];
 
         $falsy = ['no', 'off', 'false', '0', 0, ''];
@@ -570,27 +588,44 @@ class Str
      */
     public static function isAscii($value)
     {
+        // ASCII unless some character falls outside codes 0 to 127
+        // (\x00-\x7F): 'cafe' is ASCII, 'café' is not.
         return (preg_match('/(?:[^\x00-\x7F])/', $value) !== 1);
     }
 
     /**
      * Checks if the word(s) are in capitalized form.
      * @param  string $str
-     * @param  boolean $onlyFirst if true, checks only the first charatcer
+     * @param  boolean $onlyFirst if true, checks only the first character
      * @return boolean
      */
     public static function isCapitalized($str, $onlyFirst = false)
     {
-        if ($onlyFirst) {
-            return static::isUpper($str[0]);
+        if ((string) $str === '') {
+            return false;
         }
 
-        if ($words = mb_split('\s', $str)) {
-            foreach ($words as $word) {
-                $isCap[] = static::isUpper($word[0]) && static::isLower(mb_substr($word, 1));
-            }
-            return count(array_filter($isCap)) === count($isCap);
+        if ($onlyFirst) {
+            return static::isUpper(mb_substr($str, 0, 1));
         }
+
+        // Split into words at each run of whitespace (\s+), skipping empty
+        // pieces: " Hello \t World " -> ['Hello', 'World'].
+        $words = preg_split('/\s+/u', $str, -1, PREG_SPLIT_NO_EMPTY);
+
+        if (empty($words)) {
+            return false;
+        }
+
+        foreach ($words as $word) {
+            if (! static::isUpper(mb_substr($word, 0, 1))
+                || ! static::isLower(mb_substr($word, 1))
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -605,8 +640,8 @@ class Str
     }
 
     /**
-     * Checks if the chracters are in upper case
-     * 
+     * Checks if the characters are in upper case
+     *
      * @param string $str
      * @return boolean
      */
@@ -616,8 +651,8 @@ class Str
     }
 
     /**
-     * Checks if the chracters are in lower case
-     * 
+     * Checks if the characters are in lower case
+     *
      * @param string $str
      * @return boolean
      */
@@ -654,12 +689,12 @@ class Str
     }
 
     /**
-     * Checks if two words are similar
-     * 
+     * Gets the similarity of two words as a percentage.
+     *
      * @param string $str1
      * @param string $str2
-     * 
-     * @return bool
+     *
+     * @return float
      */
     public static function similarityOf($str1, $str2)
     {
@@ -729,6 +764,11 @@ class Str
             (?:\# (?:[\pL\pN\-._\~!$&\'()*+,;=:@/?]|%[0-9A-Fa-f]{2})* )?       # a fragment (optional)
         $~ixu';
 
+        // Each line of the pattern above is one URL part, named by its #
+        // note. FLUENT_PROTOCOLS becomes the protocol list, the value must
+        // match from start (^) to end ($), and the flags after the closing ~
+        // are i (any letter case), x (allows the line breaks and # notes)
+        // and u (UTF-8): 'https://example.com/path?q=1' -> true.
         return preg_match(str_replace('FLUENT_PROTOCOLS', $protocolList, $pattern), $value) > 0;
     }
 
@@ -736,11 +776,29 @@ class Str
      * Determine if a given string is a valid UUID.
      *
      * @param  string  $value
+     * @param  int|null  $version Optional UUID version (e.g. 4 or 7) to
+     *                            require; null accepts any version.
      * @return bool
      */
-    public static function isUuid($value)
+    public static function isUuid($value, $version = null)
     {
-        return wp_is_uuid($value);
+        if (is_null($version)) {
+            return wp_is_uuid($value);
+        }
+
+        if (! is_string($value)) {
+            return false;
+        }
+
+        // Five groups of lowercase hex digits, 8-4-4-4-12 long, such as
+        // '01a0c887-481d-7aa9-aa7a-dd173c5d0a19' for version 7: the third
+        // group starts with the version digit and the fourth with 8, 9, a or
+        // b. /D stops $ from also accepting a trailing newline.
+        $pattern = '/^[0-9a-f]{8}-[0-9a-f]{4}-'
+            . intval($version)
+            . '[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/D';
+
+        return preg_match($pattern, $value) === 1;
     }
 
     /**
@@ -783,22 +841,27 @@ class Str
         $value, $limit = 100, $end = '...', $preserveWords = false
     )
     {
-        if (mb_strwidth($value, 'UTF-8') <= $limit) {
+        if (mb_strlen($value, 'UTF-8') <= $limit) {
             return $value;
         }
 
         if (! $preserveWords) {
-            return rtrim(mb_strimwidth($value, 0, $limit, '', 'UTF-8')).$end;
+            return rtrim(mb_substr($value, 0, $limit, 'UTF-8')).$end;
         }
 
+        // Turn each run of line breaks into one space:
+        // "Line one\r\n\nLine two" -> 'Line one Line two'.
         $value = trim(preg_replace('/[\n\r]+/', ' ', strip_tags($value)));
 
-        $trimmed = rtrim(mb_strimwidth($value, 0, $limit, '', 'UTF-8'));
+        $trimmed = rtrim(mb_substr($value, 0, $limit, 'UTF-8'));
 
         if (mb_substr($value, $limit, 1, 'UTF-8') === ' ') {
             return $trimmed.$end;
         }
 
+        // Drop the cut-off last word by keeping everything before the last
+        // whitespace ((.*) takes as much as it can): 'The quick bro' ->
+        // 'The quick'.
         return preg_replace("/(.*)\s.*/", '$1', $trimmed).$end;
     }
 
@@ -823,6 +886,10 @@ class Str
      */
     public static function words($value, $words = 100, $end = '...')
     {
+        // Take up to $words words from the start, where a word is a run of
+        // non-spaces (\S) and the spaces after it (\s): with 3,
+        // 'Perfectly balanced, as all things' -> 'Perfectly balanced, as '.
+        // The extra + makes each part possessive: it never backtracks.
         preg_match('/^\s*+(?:\S++\s*+){1,'.$words.'}/u', $value, $matches);
 
         if (! isset($matches[0]) || static::length($value) === static::length($matches[0])) {
@@ -978,13 +1045,34 @@ class Str
     /**
      * Parse a Class[@]method style callback into class and method.
      *
-     * @param  string  $callback
+     * A callback that is not a string (a closure, object or null) comes
+     * back as it is, with the default method.
+     *
+     * @param  mixed  $callback
      * @param  string|null  $default
-     * @return array<int, string|null>
+     * @return array<int, mixed>
      */
     public static function parseCallback($callback, $default = null)
     {
-        return static::contains($callback, '@') ? explode('@', $callback, 2) : [$callback, $default];
+        if (! is_string($callback)) {
+            return [$callback, $default];
+        }
+
+        // An anonymous class has an '@' in its own name, which PHP builds as
+        // "class@anonymous", a NUL byte (\x00) and "/path/file.php:12$0".
+        // The name ends at that ':line$number'; an '@method' may follow.
+        $anonymous = '/^(.+@anonymous\x00.*:\d+\$[0-9a-f]+)(?:@(.*))?\z/s';
+
+        if (preg_match($anonymous, $callback, $parts)) {
+            return [$parts[1], ($parts[2] ?? '') !== '' ? $parts[2] : $default];
+        }
+
+        // 'Class@' names no method, so it is read as 'Class'.
+        $callback = rtrim($callback, '@');
+
+        return static::contains($callback, '@')
+            ? explode('@', $callback, 2)
+            : [$callback, $default];
     }
 
     /**
@@ -995,19 +1083,24 @@ class Str
      */
     public static function parseInt($value)
     {
+        // The first whole number in the text, with an optional + or - sign:
+        // 'Total: -42 items' -> -42.
         if (preg_match('/[-+]?\d+/', $value, $matches)) {
             return (int) $matches[0];
         }
     }
 
     /**
-     * Parse a floasting point number from a string.
-     * 
+     * Parse a floating point number from a string.
+     *
      * @param  string $value
      * @return float|null
      */
     public static function parseFloat($value)
     {
+        // The first decimal number in the text: an optional sign, digits
+        // with an optional decimal point, then an optional exponent such as
+        // e3 or E-3: 'Pi is about 3.14' -> 3.14, 'Load: -1.5e3 W' -> -1500.0.
         if (preg_match('/[-+]?\d*\.?\d+(e[-+]?\d+)?/i', $value, $matches)) {
             return (float) $matches[0];
         }
@@ -1021,6 +1114,7 @@ class Str
      */
     public static function parseNumber($value)
     {
+        // Keep only the digits: '+1 (555) 010-9999' -> '15550109999'.
         return preg_replace('/[^0-9]/', '', $value);
     }
 
@@ -1045,6 +1139,11 @@ class Str
      */
     public static function pluralStudly($value, $count = 2)
     {
+        // Split just before each capital letter to find the last word:
+        // 'VerifiedHuman' -> ['Verifie', 'd', 'Human']. (.) is the character
+        // before a capital, and (?=[A-Z]) checks that a capital comes next
+        // without taking it. The split keeps (.) as its own piece, so joining
+        // the other pieces gives back 'Verified' untouched.
         $parts = preg_split('/(.)(?=[A-Z])/u', $value, -1, PREG_SPLIT_DELIM_CAPTURE);
 
         $lastWord = array_pop($parts);
@@ -1062,9 +1161,7 @@ class Str
      * @param  string|null  $encoding
      * @return int|false
      */
-    public static function position(
-        $haystack, $needle, $offset = 0, $encoding = null
-    )
+    public static function position($haystack, $needle, $offset = 0, $encoding = null)
     {
         return mb_strpos($haystack, (string) $needle, $offset, $encoding);
     }
@@ -1082,7 +1179,11 @@ class Str
         while (($len = strlen($string)) < $length) {
             $size = $length - $len;
 
-            $bytes = random_bytes($size);
+            // Base64 turns every 3 bytes into 4 characters. If the byte count
+            // is not a multiple of 3, the last character is only partly random
+            // and favours a few letters. So round the byte count up to a
+            // multiple of 3; substr() below cuts off the extra characters.
+            $bytes = random_bytes((int) ceil($size / 3) * 3);
 
             $string .= substr(
                 str_replace(
@@ -1104,6 +1205,23 @@ class Str
     public static function repeat(string $string, int $times)
     {
         return str_repeat($string, $times);
+    }
+
+    /**
+     * Escape SQL LIKE wildcards (% and _) in a user-supplied search term.
+     *
+     * Pairs with `where('col', 'LIKE', '%'.Str::likeEscape($term).'%')` or
+     * `whereLike($col, $term)`. Uses `\` as the escape character — works as
+     * a no-op for MySQL/MariaDB (default LIKE escape is `\`); on SQLite or
+     * PostgreSQL, also append `ESCAPE '\\'` to the LIKE clause so the
+     * escapes take effect.
+     *
+     * @param  string  $value
+     * @return string
+     */
+    public static function likeEscape($value)
+    {
+        return addcslashes((string) $value, '%_\\');
     }
 
     /**
@@ -1304,6 +1422,8 @@ class Str
     {
         $quoted = preg_quote($prefix, '/');
 
+        // Remove every copy of $prefix from the start, then add one back:
+        // start('///path', '/') -> '/path'.
         return $prefix.preg_replace('/^(?:'.$quoted.')+/u', '', $value);
     }
 
@@ -1370,6 +1490,8 @@ class Str
 
         $endPunctuation = ['.', '!', '?', ':', '—', ','];
 
+        // Split into words at each run of whitespace (\s+), skipping empty
+        // pieces: "the  lord of\tthe rings" -> ['the', 'lord', 'of', ...].
         $words = preg_split('/\s+/', $value, -1, PREG_SPLIT_NO_EMPTY);
 
         for ($i = 0; $i < count($words); $i++) {
@@ -1438,8 +1560,12 @@ class Str
         }
 
         if (! ctype_lower($value)) {
+            // Capitalise each word and remove the spaces between them:
+            // 'hello world' -> 'HelloWorld'.
             $value = preg_replace('/\s+/u', '', ucwords($value));
 
+            // Put the delimiter after every character that is followed by a
+            // capital letter, then lowercase: 'HelloWorld' -> 'hello_world'.
             $value = static::lower(preg_replace('/(.)(?=[A-Z])/u', '$1'.$delimiter, $value));
         }
 
@@ -1465,9 +1591,13 @@ class Str
         $chars = $charlist ?? $defaultChars;
         $quoted = preg_quote($chars, '~');
 
-        // Unicode invisible spaces we want to include
+        // Also trim three invisible characters: \x{FEFF} (byte order mark),
+        // \x{200B} (zero-width space) and \x{200E} (left-to-right mark). \s
+        // is any whitespace.
         $unicodeSpaces = '\s\x{FEFF}\x{200B}\x{200E}';
 
+        // Each pattern matches a run of the characters to trim ([...]+) at
+        // the start (^), at the end ($), or at either end (| means "or").
         switch ($mode) {
             case 'left':
                 $pattern = '~^[' . $unicodeSpaces . $quoted . ']+~u';
@@ -1531,6 +1661,10 @@ class Str
      */
     public static function squish($value)
     {
+        // First trim whitespace and the invisible byte order mark (\x{FEFF})
+        // from both ends, then turn each run of whitespace into one space.
+        // \x{3164} and \x{1160} are Hangul filler characters that look like
+        // spaces: '  laravel   php  framework  ' -> 'laravel php framework'.
         return preg_replace('~(\s|\x{3164}|\x{1160})+~u', ' ', preg_replace('~^[\s\x{FEFF}]+|[\s\x{FEFF}]+$~u', '', $value));
     }
 
@@ -1730,6 +1864,8 @@ class Str
      */
     public static function ucsplit($string)
     {
+        // Split just before each uppercase letter in any language (\p{Lu}),
+        // removing nothing: 'ÉcoleNormale' -> ['École', 'Normale'].
         return preg_split('/(?=\p{Lu})/u', $string, -1, PREG_SPLIT_NO_EMPTY);
     }
 
@@ -1741,9 +1877,13 @@ class Str
      */
     public static function wordCount(string $string)
     {
-        $words = preg_split('/[^\p{L}\p{N}]+/u', $string, -1, PREG_SPLIT_NO_EMPTY);
-
-        return count($words);
+        // A word is a run of letters (\p{L}), accent marks (\p{M}) and
+        // digits (\p{N}) in any language. An apostrophe (' or \x{2019}) or
+        // hyphen between two runs joins them: 'Hello, world! 2 times' -> 4
+        // words, "don't stop" -> 2, 'a well-known fact' -> 3.
+        return preg_match_all(
+            '/[\p{L}\p{M}\p{N}]+(?:[\'\x{2019}-][\p{L}\p{M}\p{N}]+)*/u', $string
+        );
     }
 
     /**
@@ -1786,6 +1926,54 @@ class Str
     public static function uuid()
     {
         return wp_generate_uuid4();
+    }
+
+    /**
+     * Generate a UUID (version 7) per RFC 9562 — time-ordered.
+     *
+     * The leading 48 bits encode the creation time in milliseconds, so
+     * values sort chronologically as plain strings. Use this for sortable
+     * identifiers (log/event ids, filenames, correlation ids); use uuid()
+     * for opaque tokens, as uuid7 exposes its creation time.
+     *
+     * @return string
+     * @throws \RuntimeException When PHP integers are not 64-bit.
+     */
+    public static function uuid7()
+    {
+        if (PHP_INT_SIZE < 8) {
+            throw new RuntimeException('Str::uuid7() requires 64-bit PHP.');
+        }
+
+        $entropy = random_bytes(10);
+
+        // UUID byte 6 = entropy byte 0: force the version nibble to 0111 (7).
+        $entropy[0] = chr((ord($entropy[0]) & 0x0f) | 0x70);
+
+        // UUID byte 8 = entropy byte 2: force the variant bits to 10.
+        $entropy[2] = chr((ord($entropy[2]) & 0x3f) | 0x80);
+
+        $hex = str_pad(
+            dechex((int) (microtime(true) * 1000)), 12, '0', STR_PAD_LEFT
+        ) . bin2hex($entropy);
+
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split($hex, 4));
+    }
+
+    /**
+     * Extract the embedded creation time from a version 7 UUID.
+     *
+     * @param  string  $uuid
+     * @return int|null Unix timestamp in milliseconds,
+     *                  or null if not a valid UUIDv7.
+     */
+    public static function uuid7Time($uuid)
+    {
+        if (! is_string($uuid) || ! static::isUuid($uuid, 7)) {
+            return null;
+        }
+
+        return (int) hexdec(substr(str_replace('-', '', $uuid), 0, 12));
     }
 
     /**

@@ -29,6 +29,8 @@ class AffiliateWP extends BaseMigrator
 
         $lastId = (int) Arr::get($status, 'migrated_affiliates', 0);
 
+
+
         $affiliates = $this->db()
             ->table('affiliate_wp_affiliates')
             ->where('affiliate_id', '>', $lastId)
@@ -37,18 +39,26 @@ class AffiliateWP extends BaseMigrator
             ->get();
 
         if ($affiliates->isEmpty()) {
+            $this->resetAutoIncrement('fa_affiliates');
             $status['current_stage'] = 'referrals';
             $this->updateCurrentStatus($status, false);
             return $status;
         }
 
+        $siteSettings = (array) get_option('affwp_settings', []);
+
         $dataToInsert = [];
         foreach ($affiliates as $affiliate) {
-            $dataToInsert[] = [
+            $lastId = $affiliate->affiliate_id;
+
+            list($rate, $rateType) = $this->mapRate($affiliate->rate, $affiliate->rate_type, $siteSettings);
+
+            $row = [
                 'id'              => $affiliate->affiliate_id,
+                '__source_id'     => $affiliate->affiliate_id,
                 'user_id'         => $affiliate->user_id,
-                'rate'            => $affiliate->rate,
-                'rate_type'       => $affiliate->rate_type ?: 'default',
+                'rate'            => $rate,
+                'rate_type'       => $rateType,
                 'payment_email'   => $affiliate->payment_email,
                 'status'          => $affiliate->status,
                 'total_earnings'  => $affiliate->earnings,
@@ -59,10 +69,10 @@ class AffiliateWP extends BaseMigrator
                 'updated_at'      => $affiliate->date_registered,
             ];
 
-            $lastId = $affiliate->affiliate_id;
+            $dataToInsert[] = $row;
         }
 
-        $this->db()->table('fa_affiliates')->insert($dataToInsert);
+        $this->insertAffiliates($dataToInsert);
         $status['migrated_affiliates'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
@@ -84,14 +94,26 @@ class AffiliateWP extends BaseMigrator
             ->get();
 
         if ($referrals->isEmpty()) {
+            $this->resetAutoIncrement('fa_referrals');
             $status['current_stage'] = 'customers';
             $this->updateCurrentStatus($status, false);
             return $status;
         }
 
+        $existingIds = array_flip($this->db()->table('fa_referrals')
+            ->whereIn('id', $referrals->pluck('referral_id')->toArray())
+            ->pluck('id')
+            ->toArray()
+        );
+
         $referralToInsert = [];
 
         foreach ($referrals as $referral) {
+            $lastId = $referral->referral_id;
+
+            if (isset($existingIds[$referral->referral_id])) {
+                continue;
+            }
 
             $orderTotal = 0;
 
@@ -136,14 +158,14 @@ class AffiliateWP extends BaseMigrator
 
             $referralToInsert[] = [
                 'id'              => $referral->referral_id ?: null,
-                'affiliate_id'    => $referral->affiliate_id ?: null,
+                'affiliate_id'    => $this->mapAffiliateId($referral->affiliate_id) ?: null,
                 'visit_id'        => $referral->visit_id ?: null,
-                'description'     => $referral->description ?: null,
+                'description'     => $referral->description ? sanitize_text_field($referral->description) : null,
                 'status'          => $referral->status ?: null,
                 'amount'          => $referral->amount ?: 0,
                 'order_total'     => $orderTotal ?: 0,
                 'currency'        => $referral->currency ?: null,
-                'provider'        => $referral->context ?: null,
+                'provider'        => $this->mapProvider($referral->context),
                 'provider_id'     => $providerId ?: null,
                 'provider_sub_id' => $provider_sub_id ?: null,
                 'products'        => \maybe_serialize($formattedProducts),
@@ -152,10 +174,9 @@ class AffiliateWP extends BaseMigrator
                 'created_at'      => $referral->date ?: null,
                 'updated_at'      => $referral->date ?: null,
             ];
-            $lastId = $referral->referral_id;
         }
 
-        $this->db()->table('fa_referrals')->insert($referralToInsert);
+        $this->insertBatch('fa_referrals', $referralToInsert);
 
         $status['migrated_referrals'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -178,14 +199,27 @@ class AffiliateWP extends BaseMigrator
             ->get();
 
         if ($customers->isEmpty()) {
+            $this->resetAutoIncrement('fa_customers');
             $status['current_stage'] = 'payouts';
             $this->updateCurrentStatus($status, false);
             return $status;
         }
 
+        $existingIds = array_flip($this->db()->table('fa_customers')
+            ->whereIn('id', $customers->pluck('customer_id')->toArray())
+            ->pluck('id')
+            ->toArray()
+        );
+
         $dataToInsert = [];
 
         foreach ($customers as $customer) {
+            $lastId = $customer->customer_id;
+
+            if (isset($existingIds[$customer->customer_id])) {
+                continue;
+            }
+
             $data = [
                 'id'         => $customer->customer_id ?: null,
                 'user_id'    => $customer->user_id ?: null,
@@ -204,14 +238,13 @@ class AffiliateWP extends BaseMigrator
                 ->first();
 
             if ($firstRef && is_numeric($firstRef->meta_value)) {
-                $data['by_affiliate_id'] = $firstRef->meta_value;
+                $data['by_affiliate_id'] = $this->mapAffiliateId($firstRef->meta_value);
             }
 
             $dataToInsert[] = $data;
-            $lastId = $customer->customer_id;
         }
 
-        $this->db()->table('fa_customers')->insert($dataToInsert);
+        $this->insertBatch('fa_customers', $dataToInsert);
 
         $status['migrated_customers'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -231,14 +264,17 @@ class AffiliateWP extends BaseMigrator
 
         $currency = isset($affWPSettings['currency']) ? $affWPSettings['currency'] : 'USD';
 
+        // owner and payout_method are not grouping columns, so they have to be
+        // aggregated or MySQL rejects the query outright under the
+        // ONLY_FULL_GROUP_BY mode it enables by default.
         $payoutGroups = $this->db()->table('affiliate_wp_payouts')
             ->select([
                 $this->db()->raw('DATE(date) as date_group'),
-                'owner',
-                'payout_method'
+                $this->db()->raw('MIN(owner) as owner'),
+                $this->db()->raw('MIN(payout_method) as payout_method')
             ])
-            ->orderBy('date', 'ASC')
             ->groupBy('date_group')
+            ->orderBy('date_group', 'ASC')
             ->where('payout_id', '>', $migratedCount)
             ->limit($limit)
             ->get();
@@ -249,13 +285,26 @@ class AffiliateWP extends BaseMigrator
             return $status;
         }
 
+        $lastId = $migratedCount;
+        $failedPayoutIds = [];
+        $failedReferralIds = [];
+
         foreach ($payoutGroups as $payoutGroup) {
+            // Without the cursor here a date group straddling a batch boundary
+            // would import its earlier payouts a second time.
             $payouts = $this->db()->table('affiliate_wp_payouts')
                 ->where('date', 'LIKE', $payoutGroup->date_group . '%')
+                ->where('payout_id', '>', $migratedCount)
+                ->orderBy('payout_id', 'ASC')
                 ->get();
+
+            if ($payouts->isEmpty()) {
+                continue;
+            }
 
             $transactions = [];
             $totalPayoutAmount = 0;
+            $hasOpenPayout = false;
 
             $formattedPayout = [
                 'created_by'    => $payoutGroup->owner,
@@ -270,9 +319,21 @@ class AffiliateWP extends BaseMigrator
             ];
 
             foreach ($payouts as $payout) {
+                $lastId = max($lastId, (int) $payout->payout_id);
+
+                // a failed payout never sent the money, so its referrals stay owed
+                // and are released after the batch
+                if ($payout->status === 'failed') {
+                    $failedPayoutIds[] = (int) $payout->payout_id;
+                    $failedReferralIds = array_merge($failedReferralIds, array_map('intval', explode(',', (string) $payout->referrals)));
+                    continue;
+                }
+
+                $hasOpenPayout = $hasOpenPayout || $payout->status !== 'paid';
+
                 $transactions[] = [
                     'created_by'    => $payout->owner ?: null,
-                    'affiliate_id'  => $payout->affiliate_id ?: null,
+                    'affiliate_id'  => $this->mapAffiliateId($payout->affiliate_id) ?: null,
                     'total_amount'  => $payout->amount ?: null,
                     'currency'      => $currency ?: null,
                     'payout_method' => $payout->payout_method ?: null,
@@ -285,15 +346,20 @@ class AffiliateWP extends BaseMigrator
                 $totalPayoutAmount += $payout->amount;
             }
 
+            if (!$transactions) {
+                continue;
+            }
+
             $formattedPayout['total_amount'] = $totalPayoutAmount;
+            // an open payout keeps the header open, as Payout::recountPaymentTotal() does
+            $formattedPayout['status'] = $hasOpenPayout ? 'processing' : 'paid';
 
             $payoutId = $this->db()
                 ->table('fa_payouts')
                 ->insertGetId($formattedPayout);
 
             foreach ($transactions as $transaction) {
-                $affWpId = $transaction['aff_wp_id'];
-                $referralIds = $transaction['referrals_ids'];
+                $referralIds = array_filter($transaction['referrals_ids']);
                 $transaction['payout_id'] = $payoutId;
 
                 unset($transaction['aff_wp_id']);
@@ -301,17 +367,31 @@ class AffiliateWP extends BaseMigrator
 
                 $payoutTransactionId = $this->db()->table('fa_payout_transactions')->insertGetId($transaction);
 
-                $this->db()->table('fa_referrals')
-                    ->whereIn('id', $referralIds)
-                    ->update([
-                        'payout_id'             => $payoutId,
-                        'payout_transaction_id' => $payoutTransactionId
-                    ]);
-
+                if (!empty($referralIds)) {
+                    $this->db()->table('fa_referrals')
+                        ->whereIn('id', $referralIds)
+                        ->update([
+                            'payout_id'             => $payoutId,
+                            'payout_transaction_id' => $payoutTransactionId
+                        ]);
+                }
             }
         }
 
-        $status['migrated_payout_id'] = $affWpId;
+        // AffiliateWP marks a payout's referrals paid when it creates the payout and
+        // keeps them paid, and on its payout id, when the payout fails
+        $failedReferralIds = array_filter($failedReferralIds);
+
+        if ($failedReferralIds) {
+            $failedReferrals = $this->db()->table('fa_referrals')
+                ->whereIn('id', $failedReferralIds)
+                ->whereIn('payout_id', $failedPayoutIds);
+
+            (clone $failedReferrals)->where('status', 'paid')->update(['status' => 'unpaid']);
+            $failedReferrals->update(['payout_id' => null, 'payout_transaction_id' => null]);
+        }
+
+        $status['migrated_payout_id'] = $lastId;
         $this->updateCurrentStatus($status, false);
 
         if ($this->isTimeLimitExceeded()) {
@@ -333,6 +413,8 @@ class AffiliateWP extends BaseMigrator
             ->get();
 
         if ($visits->isEmpty()) {
+            $this->resetAutoIncrement('fa_visits');
+
             // Stay in the 'visits' stage until the paginated recount fully completes;
             // advancing early would leave affiliates past the recount cursor at zero earnings.
             if ($this->recountEarnings()) {
@@ -343,23 +425,34 @@ class AffiliateWP extends BaseMigrator
             return $status;
         }
 
+        $existingIds = array_flip($this->db()->table('fa_visits')
+            ->whereIn('id', $visits->pluck('visit_id')->toArray())
+            ->pluck('id')
+            ->toArray()
+        );
+
         $visitItems = [];
         foreach ($visits as $visit) {
+            $lastId = $visit->visit_id;
+
+            if (isset($existingIds[$visit->visit_id])) {
+                continue;
+            }
+
             $visitItems[] = [
                 'id'           => $visit->visit_id ?: null,
-                'affiliate_id' => $visit->affiliate_id ?: null,
+                'affiliate_id' => $this->mapAffiliateId($visit->affiliate_id) ?: null,
                 'referral_id'  => $visit->referral_id ?: null,
-                'url'          => $visit->url ?: null,
-                'referrer'     => $visit->referrer ?: null,
+                'url'          => $visit->url ? sanitize_url($visit->url) : null,
+                'referrer'     => $visit->referrer ? sanitize_url($visit->referrer) : null,
                 'utm_campaign' => $visit->campaign ?: null,
                 'ip'           => $visit->ip ?: null,
                 'created_at'   => $visit->date ?: null,
                 'updated_at'   => $visit->date ?: null,
             ];
-            $lastId = $visit->visit_id;
         }
 
-        $this->db()->table('fa_visits')->insert($visitItems);
+        $this->insertBatch('fa_visits', $visitItems);
 
         $status['migrated_visits'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -410,7 +503,49 @@ class AffiliateWP extends BaseMigrator
         return $this->recountEarnings();
     }
 
-    public function getCounts()
+    /**
+     * AffiliateWP fills an empty affiliate rate or rate type from its site settings, so
+     * an affiliate that sets only one of them still has its own commission. Only an
+     * affiliate that sets neither follows the site rate, which is our `default`.
+     *
+     * @return array [rate, rate_type]
+     */
+    protected function mapRate($rate, $rateType, $siteSettings)
+    {
+        $hasRate = $rate !== null && $rate !== '';
+        $hasRateType = in_array($rateType, ['percentage', 'flat'], true);
+
+        if (!$hasRate && !$hasRateType) {
+            return [$rate, 'default'];
+        }
+
+        $siteRateType = Arr::get($siteSettings, 'referral_rate_type') === 'flat' ? 'flat' : 'percentage';
+
+        return [
+            $hasRate ? $rate : Arr::get($siteSettings, 'referral_rate', 20),
+            $hasRateType ? $rateType : $siteRateType,
+        ];
+    }
+
+    /**
+     * AffiliateWP's referral context, as the provider slug our connectors look referrals
+     * up by. The other contexts we have a connector for (edd, give, lifterlms,
+     * memberpress, pmp) already match.
+     */
+    protected function mapProvider($context)
+    {
+        if (!$context) {
+            return null;
+        }
+
+        $map = [
+            'woocommerce' => 'woo',
+        ];
+
+        return Arr::get($map, $context, $context);
+    }
+
+    protected function getSourceCounts()
     {
         $db = $this->db();
 

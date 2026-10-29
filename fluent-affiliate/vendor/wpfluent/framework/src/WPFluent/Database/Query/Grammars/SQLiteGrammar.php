@@ -77,6 +77,33 @@ class SQLiteGrammar extends Grammar
     }
 
     /**
+     * Compile the SQL for a phonetic "sounds like" comparison.
+     *
+     * SQLite has no native SOUNDEX(), so the search term is encoded in PHP
+     * (see prepareSoundsLikeBinding) and only the column is passed through a
+     * soundex() UDF that must be registered on the connection from PHP's own
+     * soundex(). Using the same PHP algorithm on both sides guarantees a match.
+     *
+     * @param  \FluentAffiliate\Framework\Database\Query\Expression|string  $column
+     * @return string
+     */
+    public function compileSoundsLike($column)
+    {
+        return 'soundex('.$this->wrap($column).') = ?';
+    }
+
+    /**
+     * Encode the search term with PHP's soundex() for SQLite.
+     *
+     * @param  string  $value
+     * @return string
+     */
+    public function prepareSoundsLikeBinding($value)
+    {
+        return soundex($value);
+    }
+
+    /**
      * Compile a "where date" clause.
      *
      * @param  \FluentAffiliate\Framework\Database\Query\Builder  $query
@@ -192,6 +219,24 @@ class SQLiteGrammar extends Grammar
         [$field, $path] = $this->wrapJsonFieldAndPath($column);
 
         return 'exists (select 1 from json_each('.$field.$path.') where '.$this->wrap('json_each.value').' is '.$value.')';
+    }
+
+    /**
+     * Compile a "JSON overlaps" statement into SQL.
+     *
+     * SQLite has no native json_overlaps(), so we emulate it by checking
+     * whether any element in the column's JSON array exists in the given array.
+     *
+     * @param  string  $column
+     * @param  string  $value
+     * @return string
+     */
+    protected function compileJsonOverlaps($column, $value)
+    {
+        [$field, $path] = $this->wrapJsonFieldAndPath($column);
+
+        return 'exists (select 1 from json_each('.$field.$path.') '
+             . 'where json_each.value in (select value from json_each('.$value.')))';
     }
 
     /**
@@ -368,6 +413,8 @@ class SQLiteGrammar extends Grammar
 
         $columns = $this->compileUpdateColumns($query, $values);
 
+        // The table's alias, or its name when it has none: 'wp_posts as p'
+        // gives 'p', 'wp_posts' gives 'wp_posts'. "as" matches in any case.
         $alias = Helper::last(preg_split('/\s+as\s+/i', $query->from));
 
         $selectSql = $this->compileSelect($query->select($alias.'.rowid'));
@@ -424,6 +471,8 @@ class SQLiteGrammar extends Grammar
     {
         $table = $this->wrapTable($query->from);
 
+        // The table's alias, or its name when it has none: 'wp_posts as p'
+        // gives 'p', 'wp_posts' gives 'wp_posts'. "as" matches in any case.
         $alias = Helper::last(preg_split('/\s+as\s+/i', $query->from));
 
         $selectSql = $this->compileSelect($query->select($alias.'.rowid'));
@@ -456,5 +505,16 @@ class SQLiteGrammar extends Grammar
         [$field, $path] = $this->wrapJsonFieldAndPath($value);
 
         return 'json_extract('.$field.$path.')';
+    }
+
+    /**
+     * SQLite under WordPress does not support SAVEPOINTs via the SQL
+     * translation layer, so nested partial rollbacks are not available.
+     *
+     * @return bool
+     */
+    public function supportsSavepoints()
+    {
+        return false;
     }
 }

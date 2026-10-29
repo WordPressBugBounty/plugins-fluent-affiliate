@@ -175,16 +175,15 @@ class Payout extends Model
     {
         $this->total_amount = Transaction::query()->where('payout_id', $this->id)->sum('total_amount');
 
-        // check if there has any processing transactions
-        $processingTransactions = Transaction::query()
+        // a failed transaction still needs the admin, so it keeps the payout open
+        $openTransactions = Transaction::query()
             ->where('payout_id', $this->id)
-            ->where('status', 'processing')
+            ->whereIn('status', ['processing', 'failed'])
             ->exists();
 
-        if ($processingTransactions) {
-            $this->status = 'processing';
-        } else {
-            $this->status = 'paid';
+        // a payout being handed to a gateway keeps its lock until the send ends
+        if ($this->status !== 'sending') {
+            $this->status = $openTransactions ? 'processing' : 'paid';
         }
 
         $this->save();

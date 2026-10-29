@@ -15,6 +15,7 @@ class Request
         InteractsWithHeadersTrait,
         InputHelperMethodsTrait,
         InteractsWithFilesTrait,
+        InteractsWithIPTrait,
         MacroableTrait {
             __call as macroCall;
         }
@@ -24,6 +25,13 @@ class Request
      * @var \FluentAffiliate\Framework\Foundation\Application
      */
     protected $app = null;
+
+    /**
+     * Validator instance.
+     * 
+     * @var \FluentAffiliate\Framework\Validator\Validator
+     */
+    protected $validator = null;
 
     /**
      * PHP header variables
@@ -76,7 +84,7 @@ class Request
 
     /**
      * WP_REST_Request instance
-     * @var \WP_REST_Request
+     * @var \WP_REST_Request|false
      */
     protected $wpRestRequest = false;
 
@@ -98,8 +106,8 @@ class Request
     /**
      * Construct the request instance
      * @param \FluentAffiliate\Framework\Foundation\Application $app
-     * @param $_GET $get
-     * @param $_POST $post
+     * @param array $get
+     * @param array $post
      */
     public function __construct(Application $app, $get, $post)
     {
@@ -262,6 +270,14 @@ class Request
             }
         }
 
+        if (!$isJson) {
+            $requestBody = file_get_contents('php://input');
+            if (!empty($requestBody)) {
+                json_decode($requestBody);
+                $isJson = json_last_error() === JSON_ERROR_NONE;
+            }
+        }
+
         return $isJson;
     }
 
@@ -283,40 +299,109 @@ class Request
 
     /**
      * Check if current request is a Rest request
-     * 
+     *
+     * WordPress defines REST_REQUEST only once it routes the request, after
+     * plugins have loaded; before that, the request is a REST request when
+     * it has ?rest_route= or its path is under the REST prefix, below the
+     * site's own path: /wp-json/..., or /blog/wp-json/... for WordPress in a
+     * subfolder.
+     *
      * @return boolean
      */
     public function isRest()
     {
-        $isRest = false;
-
         if ($this->app->isUnitTesting()) {
-            return $isRest;
+            return false;
         }
 
-        $url = $this->url();
-
-        $niddle = $this->app->config->get(
-            'app.rest_namespace'
-        ).'/__endpoints';
-
-        if (str_contains($url, $niddle)) {
-            return $isRest;
+        if ($this->isForEndpoints()) {
+            return false;
         }
 
-        $isRest = defined('REST_REQUEST') && REST_REQUEST;
-
-        if (!$isRest) {
-            if (!get_option('permalink_structure')) {
-                $isRest = $this->query('rest_route', false);
-            } else {
-                $parsed = parse_url($url);
-                $path = isset($parsed['path']) ? $parsed['path'] : '';
-                $isRest = str_starts_with($path, '/wp-json');
-            }
+        if (defined('REST_REQUEST') && REST_REQUEST) {
+            return true;
         }
 
-        return $isRest;
+        return $this->restRoute() !== '';
+    }
+
+    /**
+     * Check if the request asks for the plugin's endpoint map.
+     *
+     * The admin app asks {rest_namespace}/{version}/__endpoints. Plugins
+     * made from the skeleton before 2026-02-25 ask for the namespace twice,
+     * {rest_namespace}/{version}/{rest_namespace}/__endpoints, so any route
+     * under the plugin's namespace that ends in /__endpoints counts.
+     *
+     * @param  string|null $route The REST route, e.g. /myplugin/v2/__endpoints;
+     *                            the current request's when null.
+     * @return bool
+     */
+    public function isForEndpoints($route = null)
+    {
+        $route = '/' . trim($route ?? $this->restRoute(), '/');
+
+        $namespace = '/' . trim(
+            (string) $this->app->config->get('app.rest_namespace'), '/'
+        ) . '/';
+
+        return str_starts_with($route, $namespace)
+            && str_ends_with($route, '/__endpoints');
+    }
+
+    /**
+     * Get the REST route a URL, or the request, asks for.
+     *
+     * @param  string|null $url A full URL; the current request's when null.
+     * @return string The route, e.g. /myplugin/v2/posts; '' when it is not
+     *                a REST request.
+     */
+    public function restRoute($url = null)
+    {
+        if ($url === null) {
+            $route = $this->query('rest_route');
+        } else {
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+            $route = $query['rest_route'] ?? null;
+        }
+
+        if ($route && is_string($route)) {
+            return '/' . trim($route, '/');
+        }
+
+        $path = $this->sitePath($url) . '/';
+
+        // The REST prefix: /wp-json/ unless a plugin changed it.
+        $prefix = '/' . trim(rest_get_url_prefix(), '/') . '/';
+
+        if (!str_starts_with($path, $prefix)) {
+            return '';
+        }
+
+        return '/' . trim(substr($path, strlen($prefix)), '/');
+    }
+
+    /**
+     * Get the path of a URL, or of the request, below the site's home:
+     * /shop/cart for http://example.com/blog/shop/cart when WordPress lives
+     * in /blog.
+     *
+     * @param  string|null $url A full URL; the current request's when null.
+     * @return string
+     */
+    public function sitePath($url = null)
+    {
+        $path = (string) parse_url(
+            $url ?? $this->server('REQUEST_URI', ''), PHP_URL_PATH
+        );
+
+        $home = rtrim((string) parse_url(home_url(), PHP_URL_PATH), '/');
+
+        if ($home !== '' && ($path === $home || str_starts_with($path, $home . '/'))) {
+            $path = substr($path, strlen($home));
+        }
+
+        return '/' . ltrim($path, '/');
     }
 
     /**
@@ -338,12 +423,23 @@ class Request
      */
     public function json($key = null, $default = null)
     {
-        if (!$this->isJson()) return;
-        
-        if (!isset($this->json)) {
+        if (!$this->isJson()) {
+            return [];
+        }
+
+        if (empty($this->json)) {
             $json = $this->get_json_params() ?: $this->getContent();
             
-            $this->json = (array) json_decode($json, true);
+            if (!is_array($json)) {
+                $decoded = json_decode($json, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    $this->json = [];
+                } else {
+                    $this->json = (array) $decoded;
+                }
+            } else {
+                $this->json = $json;
+            }
         }
 
         if (is_null($key)) {
@@ -365,18 +461,47 @@ class Request
     }
 
     /**
-     * Retrieve an item from the cookie
-     * @param  string $key
-     * @param  mixed $default
+     * Retrieve an item from the cookie jar.
+     *
+     * Returns the raw cookie value, with one exception: if the value is a
+     * valid strict-base64 string AND the decoded bytes parse as JSON, the
+     * decoded value is returned instead. This keeps backwards compatibility
+     * with callers that stored base64(json(...)) payloads, while normal
+     * cookies (utm_*, UUIDs, hex hashes, JWTs, plain strings) pass through
+     * unchanged because they fail one of the two gates.
+     *
+     * @param  string|null $key      Cookie name, or null for the full array
+     * @param  mixed       $default  Returned when $key is set but absent
      * @return mixed
      */
     public function cookie($key = null, $default = null)
     {
-        $cookie = $key ? Arr::get(
-            $this->cookie, $key, $default
-        ) : $this->cookie;
+        if ($key === null) {
+            return $this->cookie;
+        }
 
-        return json_decode(base64_decode($cookie, true));
+        $raw = Arr::get($this->cookie, $key, $default);
+
+        // Pass through defaults, non-strings, and empty strings unchanged
+        if ($raw === $default || !is_string($raw) || $raw === '') {
+            return $raw;
+        }
+
+        // Auto-detect base64(json(...)) payloads. Both gates must pass;
+        // otherwise return the raw cookie. Strict mode rejects values
+        // containing characters outside the base64 alphabet (e.g. '-'),
+        // and most plain values fail the JSON parse on the decoded bytes.
+        $decoded = base64_decode($raw, true);
+        if ($decoded === false) {
+            return $raw;
+        }
+
+        $parsed = json_decode($decoded, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return $raw;
+        }
+
+        return $parsed;
     }
 
     /**
@@ -476,7 +601,7 @@ class Request
      */
     public function getContent()
     {
-        if (null === $this->content || false === $this->content) {
+        if (!$this->content) {
             $this->content = file_get_contents('php://input');
         }
 
@@ -573,6 +698,11 @@ class Request
             }
         }
 
+        if (empty($this->json) && $json = $this->json()) {
+            $this->post = array_merge($this->post, $json);
+            $this->request = array_merge($this->request, $json);
+        }
+
         return $this->safe === true ? $this->validated : $this->request;
     }
 
@@ -588,23 +718,6 @@ class Request
         $clone->safe = true;
 
         return $clone;
-    }
-
-    /**
-     * Get user ip address
-     * @return string
-     */
-    public function getIp()
-    {
-        if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-            $ip = $this->server('HTTP_CLIENT_IP');
-        } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $ip = $this->server('HTTP_X_FORWARDED_FOR');
-        } else {
-            $ip = $this->server('REMOTE_ADDR');
-        }
-
-        return $ip;
     }
 
     /**
@@ -624,6 +737,8 @@ class Request
      */
     public function url()
     {
+        // Cut off the query string, everything from the first '?':
+        // '.../posts?page=2' -> '.../posts'.
         return preg_replace('/\?.*/', '', $this->getFullUrl());
     }
 
@@ -647,19 +762,57 @@ class Request
      */
     public function validate(array $rules, array $messages = [])
     {
-        $instance = $this->app->make('validator');
+        $this->validator = $this->app->make('validator')->make(
+            $this->withUploadsFor($rules), $rules, $messages
+        );
 
-        $validator = $instance->make($data = $this->all(), $rules, $messages);
+        $data = $this->all();
 
-        if ($validator->validate()->fails()) {
+        if ($this->validator->validate()->fails()) {
             throw new ValidationException(
-                'Unprocessable Entity!', 422, null, $validator->errors()
+                'Unprocessable Entity!', 422, null, $this->validator->errors()
             );
         }
 
-        $this->validated = $validator->validated();
+        $this->validated = $this->validator->validated();
 
         return $data;
+    }
+
+    /**
+     * Get the inputs plus the uploads a rule names, so file rules can check
+     * them. Uploads are turned into File objects only when a rule asks.
+     *
+     * @param  array $rules
+     * @return array
+     */
+    protected function withUploadsFor(array $rules)
+    {
+        $data = $this->all();
+
+        foreach (array_keys($rules) as $key) {
+            $input = explode('.', $key)[0];
+
+            if (!isset($_FILES[$input]) && !isset($this->files[$input])) {
+                continue;
+            }
+
+            if (!is_null($upload = $this->files($input))) {
+                $data[$input] = $upload;
+            }
+        }
+
+        return $data;
+    }
+
+    /**
+     * Get the validator instance.
+     * 
+     * @return \FluentAffiliate\Framework\Validator\Validator
+     */
+    public function getValidator()
+    {
+        return $this->validator;
     }
 
     /**
@@ -692,10 +845,12 @@ class Request
             $status = 403;
         }
 
-        $message = $message ?: 'Request has benn aborted.';
+        $message = $message ?: "{$status} Request has been aborted.";
 
         return new \WP_REST_Response(
-            is_array($message) ? $message : ['message' => (string) $message], $status
+            is_array($message) ? $message : [
+                'message' => (string) $message
+            ], $status
         );
     }
 
@@ -716,7 +871,7 @@ class Request
         }
 
         $message = $message
-            ?: "Request has benn terminated with status {$status}.";
+            ?: "Request has been terminated with status {$status}.";
 
         return wp_send_json(
             is_array($message) ? $message : ['message' => (string) $message], $status
@@ -789,6 +944,12 @@ class Request
         if ($this->app->bound('wprestrequest')) {
             // @phpstan-ignore-next-line
             if (!method_exists($this->app->wprestrequest, $method)) {
+                // Turn camelCase into snake_case: 'getURLParams' ->
+                // 'get_url_params'. The first pattern puts '_' between a
+                // lowercase letter or digit and a capital
+                // ('get_URLParams'), the second before a capital that is
+                // followed by a lowercase letter, when no '_' is there yet
+                // ('get_URL_Params'); strtolower() does the rest.
                 $method = strtolower(
                     preg_replace([
                         '/([a-z\d])([A-Z])/', '/([^_])([A-Z][a-z])/'

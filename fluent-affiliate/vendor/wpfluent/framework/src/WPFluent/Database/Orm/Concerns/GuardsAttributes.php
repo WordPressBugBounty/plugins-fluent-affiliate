@@ -211,6 +211,9 @@ trait GuardsAttributes
             return false;
         }
 
+        // The key is listed when a guarded entry equals it, ignoring case:
+        // 'password' matches 'Password'. preg_quote() makes any special
+        // characters in the key plain text.
         return $this->getGuarded() == ['*'] ||
                ! empty(preg_grep('/^'.preg_quote($key, '/').'$/i', $this->getGuarded())) ||
                ! $this->isGuardableColumn($key);

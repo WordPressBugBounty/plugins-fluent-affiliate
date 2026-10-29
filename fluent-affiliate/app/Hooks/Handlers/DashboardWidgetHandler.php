@@ -30,26 +30,25 @@ class DashboardWidgetHandler
     public function render()
     {
 
-        $db = App::make('db');
         /**
          * :TODO Optimize this query with a single query
          * */
 
 
         $todayReferralsAmount = Referral::query()
-            ->whereDate('created_at', $db->raw('CURDATE()'))
+            ->whereDate('created_at', wp_date('Y-m-d'))
             ->whereNotIn('status', ['rejected', 'refunded'])
             ->sum('amount')
         ;
 
         $lastWeekReferralsAmount = Referral::query()
-            ->whereDate('created_at', '>=', $db->raw('DATE_SUB(CURDATE(), INTERVAL 7 DAY)'))
+            ->whereDate('created_at', '>=', wp_date('Y-m-d', time() - 7 * DAY_IN_SECONDS))
             ->whereNotIn('status', ['rejected', 'refunded'])
             ->sum('amount')
         ;
 
         $lastMonthReferralsAmount = Referral::query()
-            ->whereDate('created_at', '>=', $db->raw('DATE_SUB(CURDATE(), INTERVAL 30 DAY)'))
+            ->whereDate('created_at', '>=', wp_date('Y-m-d', time() - 30 * DAY_IN_SECONDS))
             ->whereNotIn('status', ['rejected', 'refunded'])
             ->sum('amount')
         ;

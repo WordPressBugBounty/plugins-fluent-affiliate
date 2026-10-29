@@ -2,6 +2,7 @@
 
 namespace FluentAffiliate\App\Http\Controllers;
 
+use FluentAffiliate\App\Helper\Helper;
 use FluentAffiliate\App\Helper\Sanitizer;
 use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Affiliate;
@@ -40,7 +41,7 @@ class AffiliateController extends Controller
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
             ->orderBy($orderBy, $orderType)
             ->applyCustomFilters($filters)
-            ->paginate($request->getSafe('per_page', 'intval', 20))
+            ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 20)))
         ;
 
         foreach ($affiliates as $affiliate) {
@@ -74,11 +75,11 @@ class AffiliateController extends Controller
                 'full_name'      => Sanitizer::forCsv($user ? $user->full_name : ''),
                 'email'          => Sanitizer::forCsv($user ? $user->user_email : ''),
                 'payment_email'  => Sanitizer::forCsv($affiliate->payment_email ?? ''),
-                'rate_type'      => $affiliate->rate_type,
+                'rate_type'      => Sanitizer::forCsv($affiliate->rate_type),
                 'rate'           => $affiliate->rate,
-                'status'         => $affiliate->status,
-                'total_earnings' => $affiliate->total_earnings,
-                'unpaid_earnings'=> $affiliate->unpaid_earnings,
+                'status'         => Sanitizer::forCsv($affiliate->status),
+                'total_earnings' => Sanitizer::amountForCsv($affiliate->total_earnings),
+                'unpaid_earnings'=> Sanitizer::amountForCsv($affiliate->unpaid_earnings),
                 'referrals'      => (int) $affiliate->referrals,
                 'visits'         => (int) $affiliate->visits,
                 'created_at'     => (string) $affiliate->created_at,
@@ -233,6 +234,12 @@ class AffiliateController extends Controller
 
         $user = User::findOrFail($data['user_id']);
 
+        if (Affiliate::where('user_id', $user->ID)->exists()) {
+            return $this->sendError([
+                'message' => __('This user is already an affiliate', 'fluent-affiliate')
+            ]);
+        }
+
         $filteredData = Arr::only($data, ['rate_type', 'rate', 'group_id', 'status', 'payment_email', 'bank_details']);
 
         // Handle bank_details in settings
@@ -311,6 +318,10 @@ class AffiliateController extends Controller
             unset($data['group_id']);
         }
 
+        if ($error = $this->userlessActivationError($affiliate, $data['status'])) {
+            return $error;
+        }
+
         $prevStatus = $affiliate->status;
 
         // built explicitly rather than filtered: a 0 rate, a cleared note and the
@@ -366,6 +377,9 @@ class AffiliateController extends Controller
             ]);
         }
 
+        if ($error = $this->userlessActivationError($affiliate, $status)) {
+            return $error;
+        }
 
         $prevStatus = $affiliate->status;
 
@@ -386,6 +400,24 @@ class AffiliateController extends Controller
     }
 
     /**
+     * An affiliate without a WordPress user (an imported applicant) cannot log in to
+     * the portal or get email, and nothing can attach a user to it later, so it is
+     * not activated.
+     *
+     * @return mixed null when the change is allowed
+     */
+    protected function userlessActivationError(Affiliate $affiliate, $status)
+    {
+        if ($status !== 'active' || $affiliate->status === 'active' || $affiliate->user) {
+            return null;
+        }
+
+        return $this->sendError([
+            'message' => __('This affiliate has no WordPress user, so it cannot be activated. Add the affiliate again with a user.', 'fluent-affiliate'),
+        ]);
+    }
+
+    /**
      * @param Request $request
      * @param $affiliateId int Affiliate ID
      * @return mixed
@@ -394,15 +426,30 @@ class AffiliateController extends Controller
     {
         $affiliate = Affiliate::findOrFail($affiliateId);
 
-        do_action('fluent_affiliate/before_delete_affiliate', $affiliate);
-        // delete the visits
-        Visit::query()->where('affiliate_id', $affiliate->id)->delete();
-        // delete the referrals
-        Referral::query()->where('affiliate_id', $affiliate->id)->delete();
-        // Transactions are not deleted here, they are kept for record keeping.
+        // the payouts keep their totals, so deleting the referrals behind them
+        // would leave money recorded as paid for commissions that no longer exist
+        $hasPayoutHistory = Referral::query()
+            ->where('affiliate_id', $affiliate->id)
+            ->where(function ($query) {
+                $query->where('status', 'paid')->orWhereNotNull('payout_transaction_id');
+            })
+            ->exists();
 
-        // delete the affiliate
-        $affiliate->delete();
+        if ($hasPayoutHistory) {
+            return $this->sendError([
+                'message' => __('This affiliate has paid referrals or referrals in a payout, so the affiliate cannot be deleted. Deactivate the affiliate instead.', 'fluent-affiliate')
+            ]);
+        }
+
+        do_action('fluent_affiliate/before_delete_affiliate', $affiliate);
+
+        Helper::dbTransaction(function () use ($affiliate) {
+            Visit::query()->where('affiliate_id', $affiliate->id)->delete();
+            Referral::query()->where('affiliate_id', $affiliate->id)->delete();
+            // Transactions are not deleted here, they are kept for record keeping.
+            $affiliate->delete();
+        });
+
         do_action('fluent_affiliate/after_delete_affiliate', $affiliateId);
 
         return [
@@ -423,7 +470,7 @@ class AffiliateController extends Controller
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byConvertedStatus($request->getSafe('status', 'sanitize_text_field'))
             ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'id'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'))
-            ->paginate($request->getSafe('per_page', 'intval', 10));
+            ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 10)));
 
         return [
             'visits' => $visits
@@ -437,10 +484,11 @@ class AffiliateController extends Controller
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
             ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'id'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'))
-            ->paginate($request->getSafe('per_page', 'intval', 10));
+            ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 10)));
 
         foreach ($referrals as $referral) {
             $referral->provider_url = $referral->getProviderUrl();
+            $referral->hold_until = $referral->getHoldUntil();
         }
 
         return [
@@ -466,7 +514,7 @@ class AffiliateController extends Controller
         // Pro lifetime narrows this by lifetime status via the ?filter arg (active/expired).
         $query = apply_filters('fluent_affiliate/affiliate_customers_query', $query, $request, $affiliate->id);
 
-        $customers = $query->paginate($request->getSafe('per_page', 'intval', 10));
+        $customers = $query->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 10)));
 
         $response = [
             'customers' => $customers
@@ -485,7 +533,7 @@ class AffiliateController extends Controller
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
             ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'id'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'))
-            ->paginate($request->getSafe('per_page', 'intval', 10));
+            ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 10)));
 
         foreach ($transactions as $transaction) {
             $transaction->currency_symbol = Utility::getCurrencySymbol($transaction->currency);
@@ -507,19 +555,22 @@ class AffiliateController extends Controller
         $startDate = $request->getSafe('start_date', 'sanitize_text_field', $defaultStartDate);
         $endDate = $request->getSafe('end_date', 'sanitize_text_field', $defaultEndDate);
 
-        $referralQuery = Referral::query()->where('affiliate_id', $affiliate->id);
-        $visitQuery = Visit::query()->where('affiliate_id', $affiliate->id);
+        // the route needs only affiliate access, so each series needs its own permission
+        $seriesConfigs = [];
 
-        $seriesConfigs = [
-            [
-                'model' => $referralQuery,
+        if (PermissionManager::hasReferralAccess(true)) {
+            $seriesConfigs[] = [
+                'model' => Referral::query()->where('affiliate_id', $affiliate->id),
                 'label' => __('Referrals', 'fluent-affiliate')
-            ],
-            [
-                'model' => $visitQuery,
+            ];
+        }
+
+        if (PermissionManager::hasVisitAccess()) {
+            $seriesConfigs[] = [
+                'model' => Visit::query()->where('affiliate_id', $affiliate->id),
                 'label' => __('Visits', 'fluent-affiliate')
-            ],
-        ];
+            ];
+        }
 
         return ReportService::create()->getMultiChartStatistics($seriesConfigs, $startDate, $endDate);
     }
@@ -549,7 +600,7 @@ class AffiliateController extends Controller
             ] : [],
             'total_order_value' => $hasAccess['referral'] ? [
                 'title'       => __('Total Order Value', 'fluent-affiliate'),
-                'amount'      => Referral::query()->whereIn('status', ['paid', 'unpaid'])
+                'amount'      => Referral::query()->whereIn('status', ['paid', 'unpaid', 'processing'])
                     ->where('affiliate_id', $affiliate->id)
                     ->sum('order_total'),
                 'is_currency' => true,

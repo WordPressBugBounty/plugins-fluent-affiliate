@@ -15,8 +15,9 @@ class CustomSanitizer
         $fieldTypes = apply_filters('fluent_affiliate/referral_config_field_types', [
             'referral_variable'        => 'text',
             'currency'                 => 'text',
-            'rate'                     => 'number',
+            'rate'                     => 'float',
             'cookie_duration'          => 'number',
+            'holding_days'             => 'number',
             'dashboard_page_id'        => 'number',
             'referral_format'          => ['id', 'username'],
             'rate_type'                => ['percentage', 'fixed'],
@@ -47,6 +48,36 @@ class CustomSanitizer
             }
         }
 
+        if (array_key_exists('holding_days', $data)) {
+            $data['holding_days'] = max(0, min(365, (int) $data['holding_days']));
+        }
+
+        if (array_key_exists('rate', $data)) {
+            $data['rate'] = self::sanitizeRate(
+                $data['rate'],
+                Arr::get($data, 'rate_type', Utility::getReferralSetting('rate_type'))
+            );
+        }
+
         return $data;
+    }
+
+    /**
+     * The default commission rate: never negative, and never above 100 when it
+     * is a percentage.
+     */
+    private static function sanitizeRate($rate, $rateType)
+    {
+        $rate = (float) $rate;
+
+        if (!is_finite($rate) || $rate < 0) {
+            return 0;
+        }
+
+        if ($rateType === 'percentage' && $rate > 100) {
+            return 100;
+        }
+
+        return $rate;
     }
 }

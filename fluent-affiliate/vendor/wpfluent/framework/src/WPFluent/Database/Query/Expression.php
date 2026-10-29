@@ -35,4 +35,14 @@ class Expression implements ExpressionInterface
 	{
 		return $this->value;
 	}
+
+	/**
+	 * Convert the object to its string representation.
+	 * 
+	 * @return string [description]
+	 */
+	public function __toString()
+	{
+		return (string) $this->value;
+	}
 }

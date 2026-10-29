@@ -24,6 +24,11 @@
         "wpfluent/framework": "^2.10.35",
         "woocommerce/action-scheduler": "^3.8"
     },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6",
+        "mockery/mockery": "^1.6",
+        "brain/monkey": "^2.6"
+    },
     "autoload": {
         "psr-4": {
             "FluentAffiliate\\App\\": "app/",
@@ -39,6 +44,11 @@
             "app/Services/Libs/Emogrifier/scoped-vendor"
         ]
     },
+    "autoload-dev": {
+        "psr-4": {
+            "FluentAffiliate\\Tests\\": "tests/php/"
+        }
+    },
     "extra": {
         "branch-alias": {
             "dev-master": "1.0.x-dev"
@@ -52,7 +62,9 @@
     "scripts": {
         "post-update-cmd": [
             "FluentAffiliate\\App\\ComposerScript::postUpdate"
-        ]
+        ],
+        "test": "php -d auto_prepend_file=tests/php/define-abspath.php vendor/bin/phpunit --no-coverage",
+        "test:coverage": "php -d auto_prepend_file=tests/php/define-abspath.php vendor/bin/phpunit"
     },
     "minimum-stability": "dev",
     "prefer-stable": true

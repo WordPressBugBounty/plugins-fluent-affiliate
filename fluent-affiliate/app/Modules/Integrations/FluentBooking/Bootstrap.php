@@ -61,7 +61,7 @@ class Bootstrap extends BaseConnector
             'ip'         => $order->ip_address
         ];
 
-        $orderTotal = $this->centsToDecimal($order->total_amount, $order->currency);
+        $orderTotal = $this->hundredthsToDecimal($order->total_amount);
 
         $description = $booking->calendar->title . '(' . $calendarSlot->title . ')';
         $formattedItems = [
@@ -102,12 +102,13 @@ class Bootstrap extends BaseConnector
 
         $referralLink = Utility::getAdminPageUrl('referrals/' . $referral->id . '/view');
 
+        // FluentBooking renders this note as HTML
         $note = \sprintf(
         // translators: %1$s: referral link, %2$s: referral amount, %3$s: affiliate name, %4$d: affiliate id
-            __('Referral %1$s for %2$s recorded for %3$s (ID: %4$d).', 'fluent-affiliate'),
-            '<a href="' . $referralLink . '" target="_blank">' . $referral->id . '</a>',
-            $order->currency . ' ' . $referral->amount,
-            $affiliate->full_name,
+            esc_html__('Referral %1$s for %2$s recorded for %3$s (ID: %4$d).', 'fluent-affiliate'),
+            '<a href="' . esc_url($referralLink) . '" target="_blank">' . (int) $referral->id . '</a>',
+            esc_html($order->currency . ' ' . $referral->amount),
+            esc_html($affiliate->user ? $affiliate->user->full_name : ''),
             $affiliate->id
         );
 

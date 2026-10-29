@@ -1,4 +1,13 @@
 <?php
+/**
+ * @package WPFluent
+ * @author  Sheikh Heera <heera.sheikh77@gmail.com> (https://heera.it)
+ * @author  Sheikh Heera <mail@heera.it>
+ * @author  Sheikh Heera <heera@authlab.io>
+ * @link    https://github.com/wpfluent/framework2x
+ * @license MIT https://opensource.org/licenses/MIT
+ * @license GPL-2.0-or-later https://www.gnu.org/licenses/gpl-2.0.html
+ */
 
 namespace FluentAffiliate\Framework\Foundation;
 
@@ -6,16 +15,37 @@ use InvalidArgumentException;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\Framework\Support\Env;
 use FluentAffiliate\Framework\Http\Client;
+use FluentAffiliate\Framework\Http\Response\Response;
+use FluentAffiliate\Framework\Http\Response\FileResponse;
 use FluentAffiliate\Framework\Foundation\Config;
 use FluentAffiliate\Framework\Container\Container;
 use FluentAffiliate\Framework\Foundation\ComponentBinder;
 use FluentAffiliate\Framework\Foundation\Concerns\FoundationTrait;
 
 /**
- * @property \FluentAffiliate\Framework\Foundation\Config $config
- * @property \FluentAffiliate\Framework\Http\Router\Router $router
- * @property \FluentAffiliate\Framework\Http\Request\Request $request
- * @property \FluentAffiliate\Framework\Http\Response\Response $response
+ * Application — service container with magic property access via __get.
+ *
+ * Properties below are bound in {@see ComponentBinder::bindComponents()} and
+ * {@see Application::init()}/{@see Application::setAppLevelNamespace()}. Each
+ * `@property` declaration teaches PHPStan about a runtime container binding so
+ * `$app->view->render(...)` and similar access can be type-checked.
+ *
+ * @property \FluentAffiliate\Framework\Foundation\Config        $config
+ * @property \FluentAffiliate\Framework\View\View                $view
+ * @property \FluentAffiliate\Framework\Cache\Cache              $cache
+ * @property \FluentAffiliate\Framework\Http\Router              $router
+ * @property \FluentAffiliate\Framework\Http\Request\Request     $request
+ * @property \FluentAffiliate\Framework\Http\Response\Response   $response
+ * @property \FluentAffiliate\Framework\Validator\Validator      $validator
+ * @property \FluentAffiliate\Framework\Events\Dispatcher        $events
+ * @property \FluentAffiliate\Framework\Encryption\Encrypter     $encrypter
+ * @property \FluentAffiliate\Framework\Encryption\Encrypter     $crypt
+ * @property \FluentAffiliate\Framework\Database\DatabaseManager $db
+ * @property \FluentAffiliate\Framework\Http\URL                 $url
+ * @property \FluentAffiliate\Framework\Support\Mail             $mail
+ * @property \FluentAffiliate\Framework\Support\Pipeline         $pipeline
+ * @property string                             $__pluginfile__
+ * @property string                             $__namespace__
  */
 class Application extends Container
 {
@@ -177,8 +207,10 @@ class Application extends Container
         $this->bindAppInstance();
         $this->bindPathsAndUrls();
         $this->loadConfigIfExists();
+        $this->registerMiddleware();
         $this->registerTextdomain();
         $this->bindCoreComponents();
+        $this->registerAsyncReceiver();
         $this->requireCommonFiles($this);
         $this->addRestApiInitAction($this);
     }
@@ -243,15 +275,45 @@ class Application extends Container
      */
     protected function loadConfigIfExists()
     {
-        $data = [];
+        $files = [];
 
         if (is_dir($this['path.config'])) {
             foreach (glob($this['path.config'] . '*.php') as $file) {
-                $data[basename($file, '.php')] = require($file);
+                // middleware.php lives under app/Http/ now; it ships closures
+                // that don't belong in Config storage.
+                if (basename($file) === 'middleware.php') {
+                    continue;
+                }
+                $files[basename($file, '.php')] = $file;
             }
         }
 
-        $this->instance('config', new Config($data));
+        $this->instance('config', new Config([], $files));
+    }
+
+    /**
+     * Register the HTTP middleware stack as a lazy container binding.
+     *
+     * Resolves from `app/Http/middleware.php` (canonical). Falls back to
+     * `config/middleware.php` so un-migrated plugins keep working.
+     *
+     * @return void
+     */
+    protected function registerMiddleware()
+    {
+        $this->singleton('http.middleware', function ($app) {
+            $new = $app['path.http'] . 'middleware.php';
+            if (is_file($new)) {
+                return require $new;
+            }
+
+            $legacy = $app['path.config'] . 'middleware.php';
+            if (is_file($legacy)) {
+                return require $legacy;
+            }
+
+            return [];
+        });
     }
 
     /**
@@ -317,6 +379,17 @@ class Application extends Container
     }
 
     /**
+     * Listen for the background requests Async sends. It runs only jobs
+     * this site signed, so it is safe to register for every plugin.
+     * 
+     * @return null
+     */
+    protected function registerAsyncReceiver()
+    {
+        Async::init($this);
+    }
+
+    /**
      * Load (include) the files where hooks are registered.
      * 
      * @param self $app
@@ -329,11 +402,21 @@ class Application extends Container
             'rest_pre_serve_request', [$this, 'preServeRequest'], 10, 4
         );
 
+        // A file response is streamed instead of printed as JSON.
+        $this->addFilter('rest_pre_serve_request', function (...$args) {
+            return FileResponse::serve(...$args);
+        }, 20, 4);
+
+        // Last, so the cookies go out just before WordPress sends headers.
+        $this->addFilter('rest_post_dispatch', function ($response) {
+            return $this->make(Response::class)->sendEachCookie($response);
+        }, PHP_INT_MAX);
+
         require_once $this->basePath . 'app/Hooks/actions.php';
         require_once $this->basePath . 'app/Hooks/filters.php';
-
-        if (file_exists($includes = $this->basePath . 'app/Hooks/includes.php')) {
-            require_once $includes;
+        
+        if (file_exists($f = $this->basePath . 'app/Hooks/includes.php')) {
+            require_once $f;
         }
     }
 
@@ -352,19 +435,18 @@ class Application extends Container
             $route = $request->get_route();
             $slug = $this->config->get('app.slug');
             
-            if ($this->isRequestOfPlugin($route, $slug)) {
-                if ($this->isRequestForEndpoints($route)) {
-                    status_header(200);
-                    $result->set_status(200);
-                    // @phpstan-ignore-next-line
-                    $result->set_data($this->endpoints);
-                } else {
-                    $result->set_data(
-                        $this->customizeNotFoundResponse(
-                            $result, $request
-                        )
-                    );
-                }
+            // The map names every controller and policy class, so only a
+            // logged-in user gets it; anyone else gets the plugin's 404.
+            if ($this->isRequestForEndpoints($route) && is_user_logged_in()) {
+                status_header(200);
+                $result->set_status(200);
+                $result->set_data($this->router->endpoints());
+            } elseif ($this->isRequestOfPlugin($route, $slug)) {
+                $result->set_data(
+                    $this->customizeNotFoundResponse(
+                        $result, $request
+                    )
+                );
             }
         }
 
@@ -372,53 +454,73 @@ class Application extends Container
     }
 
     /**
-     * Determines whether the request is madse by plugin.
-     * 
-     * @param  string  $route (Rest route|Full URL)
-     * @param  string  $slug  (Plugin's slug)
+     * Determines whether a request is for the plugin: a REST route under
+     * its REST namespace, a web route under its slug, or its admin page.
+     *
+     * @param  string $route A REST route as WordPress gives it
+     *                       (/myplugin/v2/posts), a full URL, or '' for the
+     *                       current request.
+     * @param  string $slug  The slug its web routes and admin page use;
+     *                       app.slug by default.
      * @return bool
      */
     public function isRequestOfPlugin($route = '', $slug = '')
     {
         $slug = $slug ?: $this->config->get('app.slug');
 
-        if (!$route) {
-            if (get_option('permalink_structure')) {
-                $route = $this->request->url();
-            } else {
-                $route = $this->request->query('rest_route');
-            }
+        if (is_admin() && $this->request->query('page') === $slug) {
+            return true;
         }
 
-        // For web routing (If web-routing is installed)
-        if (!$route && !$this->request->isRest()) {
-            $route = $this->request->url();
+        if ($route && !str_contains($route, '://')) {
+            $restRoute = '/' . trim($route, '/');
+            $path = '';
+        } else {
+            $url = $route ?: null;
+            $restRoute = $this->request->restRoute($url);
+            $path = $this->request->sitePath($url);
         }
 
-        $parsedUrl = parse_url($route ?? '');
-        
-        $path = str_replace('/wp-json', '', $parsedUrl['path'] ?? '');
+        if ($restRoute !== '') {
+            return $this->isPathUnder(
+                $restRoute, $this->config->get('app.rest_namespace')
+            );
+        }
 
-        if (is_admin()) {
-            $page = $this->request->query('page');
-            if ($slug === $page) {
-                $path = $page;
-            }
-        } 
+        return $this->isPathUnder($path, $slug);
+    }
 
-        return str_starts_with(ltrim($path, '/'), $slug);
+    /**
+     * Whether a path is a segment or below it: /shop and /shop/cart are
+     * under shop, /shopping is not.
+     *
+     * @param  string $path
+     * @param  string $segment
+     * @return bool
+     */
+    protected function isPathUnder($path, $segment)
+    {
+        $segment = trim((string) $segment, '/');
+
+        if ($segment === '') {
+            return false;
+        }
+
+        $path = '/' . trim((string) $path, '/');
+
+        return $path === '/' . $segment
+            || str_starts_with($path, '/' . $segment . '/');
     }
 
     /**
      * Determines if the request is made for endpoints.
      * 
-     * @param  string  $route (Rest route|Full URL)
-
+     * @param  string  $route The REST route, e.g. /myplugin/v2/__endpoints.
      * @return bool
      */
     protected function isRequestForEndpoints($route)
     {
-        return str_ends_with($route, '__endpoints');
+        return $this->request->isForEndpoints($route);
     }
 
     /**
@@ -523,8 +625,10 @@ class Application extends Container
      */
     protected function callPluginReadyCallbacks()
     {
-        while ($callback = array_pop($this->onReady)) {
-            $callback($this);
-        }
+        $this->addAction('init', function() {
+            while ($callback = array_pop($this->onReady)) {
+                $callback($this);
+            }
+        });
     }
 }

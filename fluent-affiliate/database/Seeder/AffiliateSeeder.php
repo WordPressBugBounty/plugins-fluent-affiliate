@@ -46,7 +46,6 @@ class AffiliateSeeder extends Seeder
             Visit::query()->truncate();
 	        Transaction::query()->truncate();
 	        Payout::query()->truncate();
-			User::query()->truncate();
 	        \WP_CLI::line('Seeding Tables');
             $this->seed();
         } catch (\Exception $e) {
@@ -71,7 +70,11 @@ class AffiliateSeeder extends Seeder
 			'url'            => $faker->url,
 		];
 
-		$users[] = $admin;
+		// wp_users keeps its rows and user_login has no unique key, so a second
+		// 'admin' row would sit next to the real one
+		if (!username_exists('admin')) {
+			$users[] = $admin;
+		}
 
         for ($i = 0; $i < $count; $i++) {
             $users[] = [

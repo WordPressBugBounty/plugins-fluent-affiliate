@@ -3,6 +3,7 @@
 namespace FluentAffiliate\Framework\Http;
 
 use Exception;
+use WP_HTTP_Response;
 use BadMethodCallException;
 use InvalidArgumentException;
 use FluentAffiliate\Framework\Foundation\App;
@@ -122,7 +123,7 @@ class Ajax
 	    $callback = function () use ($method, $handler) {
 	        try {
 	            wp_send_json_success(
-	                $this->handle($method, $handler)
+	                $this->toAjaxData($this->handle($method, $handler))
 	            );
 	        } catch (Exception $e) {
 	            wp_send_json_error($e->getMessage());
@@ -162,6 +163,31 @@ class Ajax
 		return $this->app->call(
 			$this->app->parseHookHandler($handler)
 		);
+	}
+
+	/**
+	 * Turn a handler's redirect into where the page should go, since an
+	 * ajax call can't redirect the page itself: the script reads
+	 * data.redirect_to and navigates. Anything else is sent as it is.
+	 *
+	 * @param  mixed $result
+	 * @return mixed
+	 */
+	protected function toAjaxData($result)
+	{
+		if (!$result instanceof WP_HTTP_Response) {
+			return $result;
+		}
+
+		$status = $result->get_status();
+
+		$headers = array_change_key_case($result->get_headers());
+
+		if ($status >= 300 && $status < 400 && isset($headers['location'])) {
+			return ['redirect_to' => $headers['location']];
+		}
+
+		return $result;
 	}
 
 	/**

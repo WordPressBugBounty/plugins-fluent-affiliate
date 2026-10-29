@@ -4,6 +4,7 @@ namespace FluentAffiliate\Framework\Http\Request;
 
 use ArrayAccess;
 use SplFileInfo;
+use LogicException;
 use JsonSerializable;
 use RuntimeException;
 use FluentAffiliate\Framework\Support\Util;
@@ -41,6 +42,13 @@ class File extends SplFileInfo implements Contract, JsonSerializable, ArrayAcces
     private $error;
 
     /**
+     * Whether the file was made by File::fake() rather than uploaded.
+     *
+     * @var bool $test
+     */
+    private $test = false;
+
+    /**
      * HTTP File instantiator.
      *
      * @param $path
@@ -59,6 +67,29 @@ class File extends SplFileInfo implements Contract, JsonSerializable, ArrayAcces
         $this->init($path, $size, $error);
         $this->originalName = $this->getName($originalName);
         $this->mimeType = $this->getFileMimeType($mimeType);
+    }
+
+    /**
+     * Make a file for a test, as if it had been uploaded.
+     *
+     * A file a test creates never came through HTTP, so is_uploaded_file()
+     * rejects it; a fake file is trusted instead, like Laravel's
+     * UploadedFile::fake(). Real uploads can never be marked this way.
+     *
+     * @param  string      $path
+     * @param  string|null $originalName Defaults to the file's own name.
+     * @param  string|null $mimeType
+     * @return static
+     */
+    public static function fake($path, $originalName = null, $mimeType = null)
+    {
+        $file = new static(
+            $path, $originalName ?? basename($path), $mimeType, null, UPLOAD_ERR_OK
+        );
+
+        $file->test = true;
+
+        return $file;
     }
 
     /**
@@ -105,7 +136,7 @@ class File extends SplFileInfo implements Contract, JsonSerializable, ArrayAcces
         if (!$mimeType) {
             $path = $this->getPathname() ?: $this->getRealPath();
 
-            if (!file_exists($path)) {
+            if (!$path || !is_file($path)) {
                 throw new RuntimeException(
                     "File does not exist at path: $path"
                 );
@@ -113,9 +144,12 @@ class File extends SplFileInfo implements Contract, JsonSerializable, ArrayAcces
 
             if ($handle = @fopen($path, 'rb')) {
                 $data = fread($handle, 8192);
-                $finfo = new \finfo(FILEINFO_MIME_TYPE);
-                $mimeType = $finfo->buffer($data);
                 fclose($handle);
+
+                if ($data !== false) {
+                    $finfo = new \finfo(FILEINFO_MIME_TYPE);
+                    $mimeType = $finfo->buffer($data);
+                }
             } else {
                 throw new RuntimeException(
                     "Failed to open file at path: $path"
@@ -145,12 +179,7 @@ class File extends SplFileInfo implements Contract, JsonSerializable, ArrayAcces
     {
         $isOk = UPLOAD_ERR_OK === $this->getError();
 
-        // Allow fake uploads in tests
-        if (str_contains(App::make()->env(), 'test')) {
-            return $isOk;
-        }
-
-        return $isOk && is_uploaded_file($this->getPathname());
+        return $isOk && ($this->test || is_uploaded_file($this->getPathname()));
     }
 
     /**
@@ -404,12 +433,25 @@ class File extends SplFileInfo implements Contract, JsonSerializable, ArrayAcces
 
         // For Windows
         if (DIRECTORY_SEPARATOR === '\\') {
-            return preg_match(
-                '/^[a-zA-Z]:\\\\/', $path
-            ) || substr($path, 0, 2) === '\\\\';
+            return $this->isWindowsAbsolutePath($path);
         }
 
         return false;
+    }
+
+    /**
+     * Determine if the given path is absolute on Windows.
+     *
+     * @param  string  $path
+     * @return bool
+     */
+    protected function isWindowsAbsolutePath($path)
+    {
+        // A Windows absolute path starts with a drive letter, a colon
+        // and a backslash or slash ('C:\Users', 'C:/Users'), or with
+        // '\\' for a network share.
+        return preg_match('/^[a-zA-Z]:[\\\\\/]/', $path) === 1
+            || substr($path, 0, 2) === '\\\\';
     }
 
     /**
@@ -568,15 +610,33 @@ class File extends SplFileInfo implements Contract, JsonSerializable, ArrayAcces
         return $array[$offset] ?? null;
     }
 
+    /**
+     * File details are read-only: toArray() works them out from the
+     * file each time, so there is nothing to set.
+     *
+     * @param  string  $offset
+     * @param  mixed  $value
+     * @return void
+     *
+     * @throws \LogicException
+     */
     #[\ReturnTypeWillChange]
     public function offsetSet($offset, $value)
     {
-        //...
+        throw new LogicException("File details are read-only: `{$offset}` can't be set.");
     }
 
+    /**
+     * File details are read-only, so none can be removed.
+     *
+     * @param  string  $offset
+     * @return void
+     *
+     * @throws \LogicException
+     */
     #[\ReturnTypeWillChange]
     public function offsetUnset($offset)
     {
-        //...
+        throw new LogicException("File details are read-only: `{$offset}` can't be unset.");
     }
 }

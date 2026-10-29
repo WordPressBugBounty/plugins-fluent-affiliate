@@ -93,8 +93,13 @@ class Affiliate extends Model
     public function increase($column)
     {
         if ($column == 'referrals' || $column == 'visits') {
-            $this->{$column} = $this->{$column}+1;
-            $this->save();
+            // incremented in the database, so concurrent requests cannot overwrite
+            // each other's count. The columns are nullable and NULL + 1 stays NULL.
+            static::query()->where('id', $this->id)->update([
+                $column => FluentAffiliate('db')->raw("COALESCE(`{$column}`, 0) + 1")
+            ]);
+            $this->{$column} = $this->{$column} + 1;
+            $this->syncOriginalAttribute($column);
         }
         return $this;
     }
@@ -139,6 +144,20 @@ class Affiliate extends Model
             'website'      => $userModel->user_url,
             'user_name'    => $userModel->user_login,
         ];
+    }
+
+    /**
+     * Eager load constraint for screens that only name the affiliate. The full
+     * rows carry payout details, earnings, notes and the WordPress account
+     * (email, login), which a reader of visits or referrals has no permission to see.
+     *
+     * @return \Closure
+     */
+    public static function identityOnly()
+    {
+        return function ($query) {
+            $query->select(['id', 'user_id'])->with(['user' => User::nameOnly()]);
+        };
     }
 
     /**
@@ -345,8 +364,10 @@ class Affiliate extends Model
             ->where('status', 'paid')
             ->sum('amount');
 
+        // processing money is on its way through a gateway: still owed to the
+        // affiliate, so it counts as unpaid and "Total Paid" stays exact
         $unpaidEarnings = Referral::where('affiliate_id', $this->id)
-            ->where('status', 'unpaid')
+            ->whereIn('status', ['unpaid', 'processing'])
             ->sum('amount');
 
         $this->total_earnings  = $paidEarnings + $unpaidEarnings;

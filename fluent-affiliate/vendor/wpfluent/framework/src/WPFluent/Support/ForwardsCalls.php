@@ -22,6 +22,11 @@ trait ForwardsCalls
         try {
             return $object->{$method}(...$parameters);
         } catch (Error|BadMethodCallException $e) {
+            // Read PHP's 'Call to undefined method Class::method()' error: the
+            // class is everything before '::', the method everything before
+            // '('. (?P<name>...) names a part so it can be read from $matches:
+            // 'Call to undefined method App\Models\Post::publish()' -> class
+            // 'App\Models\Post', method 'publish'.
             $pattern = '~^Call to undefined method (?P<class>[^:]+)::(?P<method>[^\(]+)\(\)$~';
 
             if (! preg_match($pattern, $e->getMessage(), $matches)) {

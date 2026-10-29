@@ -51,15 +51,9 @@ class Bootstrap extends BaseConnector
             return;
         }
 
-        $referral = $this->getExistingReferral($submissionId);
-
-        if ($referral) {
-            if (!in_array($referral->status, ['paid', 'rejected'])) {
-                $this->markReferralAsUnpaid($referral);
-            }
-            return;
-        }
-
+        // This hook fires before the gateway is charged, and again when a pending
+        // submission is resubmitted, so an existing referral is left as it is.
+        // Only the paid status change in maybeMarkReferralComplete() makes it payable.
         $this->addPaymentReferral($submissionId, $submission, $form);
     }
 

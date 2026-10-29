@@ -75,7 +75,7 @@ return function ($file) {
         \WP_CLI::add_command('fluent_affiliate', '\FluentAffiliate\App\Hooks\CLI\Commands');
     }
 
-    add_action('fluent_affilate/rendering_admin_app', function () {
+    add_action('fluent_affiliate/admin_app_rendering', function () {
         if (function_exists('\as_next_scheduled_action')) {
             // Schedule hourly jobs
             if (!\as_next_scheduled_action('fluent_affiliate_scheduled_hour_jobs')) {

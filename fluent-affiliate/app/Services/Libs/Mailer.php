@@ -75,6 +75,14 @@ class Mailer
 
     public function to($email, $name = '')
     {
+        // wp_mail() splits a To string on commas, so a display name carrying a
+        // comma/semicolon injects extra recipients; angle brackets/quotes reframe
+        // the address and control characters such as CR/LF inject headers. Strip
+        // them before building it.
+        if ($name) {
+            $name = trim(preg_replace('/[\x00-\x1F\x7F,;<>"]+/', ' ', $name));
+        }
+
         if ($name) {
             $this->to = $name . ' <' . $email . '>';
         } else {
@@ -132,21 +140,29 @@ class Mailer
         }
 
         if ($this->from) {
-            $headers[] = 'From: ' . $this->from;
+            $headers[] = 'From: ' . $this->stripLineBreaks($this->from);
         }
 
         if ($this->cc) {
-            $headers[] = 'Cc: ' . implode(',', $this->cc);
+            $headers[] = 'Cc: ' . $this->stripLineBreaks(implode(',', $this->cc));
         }
 
         if ($this->bcc) {
-            $headers[] = 'Bcc: ' . implode(',', $this->bcc);
+            $headers[] = 'Bcc: ' . $this->stripLineBreaks(implode(',', $this->bcc));
         }
 
         if ($this->replyTo) {
-            $headers[] = 'Reply-To: ' . $this->replyTo;
+            $headers[] = 'Reply-To: ' . $this->stripLineBreaks($this->replyTo);
         }
 
-        return wp_mail($this->to, $this->subject, $this->body, $headers);
+        return wp_mail($this->to, $this->stripLineBreaks($this->subject), $this->body, $headers);
+    }
+
+    /**
+     * A line break inside a header value would start a header of its own.
+     */
+    private function stripLineBreaks($value)
+    {
+        return str_replace(["\r", "\n"], '', (string) $value);
     }
 }

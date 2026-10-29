@@ -26,6 +26,8 @@ class SolidAffiliate extends BaseMigrator
 
         $lastId = (int) Arr::get($status, 'migrated_affiliates', 0);
 
+
+
         // SA status → FA status
         $affiliateStatusMap = [
             'approved' => 'active',
@@ -50,6 +52,7 @@ class SolidAffiliate extends BaseMigrator
         ;
 
         if ($affiliates->isEmpty()) {
+            $this->resetAutoIncrement('fa_affiliates');
             $status['current_stage'] = 'referrals';
             $this->updateCurrentStatus($status);
             return $status;
@@ -77,6 +80,7 @@ class SolidAffiliate extends BaseMigrator
 
             $data = [
                 'id'              => $affiliate->id,
+                '__source_id'     => $affiliate->id,
                 'user_id'         => $affiliate->user_id,
                 'group_id'        => $groupId,
                 'rate'            => $affiliate->commission_rate ?: null,
@@ -94,12 +98,8 @@ class SolidAffiliate extends BaseMigrator
             ];
             $dataToInsert[] = $data;
         }
-        
-        try {
-            $this->db()->table('fa_affiliates')->insert($dataToInsert);
-        } catch (\Exception $e) {
-            // Skip this batch to avoid infinite retry loop
-        }
+
+        $this->insertAffiliates($dataToInsert);
 
         $status['migrated_affiliates'] = $lastId;
         $this->updateCurrentStatus($status);
@@ -171,17 +171,27 @@ class SolidAffiliate extends BaseMigrator
 
         $productTitles = $this->getProductTitles($productIds);
 
+        $existingIds = array_flip($this->db()->table('fa_referrals')
+            ->whereIn('id', $referrals->pluck('id')->toArray())
+            ->pluck('id')
+            ->toArray()
+        );
+
         $referralToInsert = [];
 
         foreach ($referrals as $referral) {
             $lastId = $referral->id;
 
+            if (isset($existingIds[$referral->id])) {
+                continue;
+            }
+
             $data = [
                 'id'            => $referral->id,
-                'affiliate_id'  => $referral->affiliate_id,
+                'affiliate_id'  => $this->mapAffiliateId($referral->affiliate_id),
                 'customer_id'   => $referral->customer_id ?: null,
                 'visit_id'      => $referral->visit_id ?: null,
-                'description'   => $referral->description ?: null,
+                'description'   => $referral->description ? sanitize_text_field($referral->description) : null,
                 'amount'        => $referral->commission_amount,
                 'order_total'   => $referral->order_amount,
                 'currency'      => null,
@@ -196,11 +206,7 @@ class SolidAffiliate extends BaseMigrator
             $referralToInsert[] = $data;
         }
 
-        try {
-            $this->db()->table('fa_referrals')->insert($referralToInsert);
-        } catch (\Exception $e) {
-            // Skip this batch to avoid infinite retry loop
-        }
+        $this->insertBatch('fa_referrals', $referralToInsert);
 
         $status['migrated_referrals'] = $lastId;
         $this->updateCurrentStatus($status);
@@ -395,7 +401,7 @@ class SolidAffiliate extends BaseMigrator
 
             $customerData = [
                 'user_id'         => $userId,
-                'by_affiliate_id' => $link->affiliate_id,
+                'by_affiliate_id' => $this->mapAffiliateId($link->affiliate_id),
                 'email'           => $email,
                 'first_name'      => $firstName,
                 'last_name'       => $lastName,
@@ -406,13 +412,7 @@ class SolidAffiliate extends BaseMigrator
             $dataToInsert[] = $customerData;
         }
 
-        if (!empty($dataToInsert)) {
-            try {
-                Customer::insert($dataToInsert);
-            } catch (\Exception $e) {
-                // Skip this batch to avoid infinite retry loop
-            }
-        }
+        $this->insertBatch('fa_customers', $dataToInsert);
 
         $status['migrated_customers'] = $migratedCount;
         $this->updateCurrentStatus($status, false);
@@ -473,7 +473,7 @@ class SolidAffiliate extends BaseMigrator
 
             $customerData = [
                 'user_id'         => $user->ID,
-                'by_affiliate_id' => $affiliateMap[$userId] ?? null,
+                'by_affiliate_id' => isset($affiliateMap[$userId]) ? $this->mapAffiliateId($affiliateMap[$userId]) : null,
                 'email'           => $user->user_email,
                 'first_name'      => get_user_meta($user->ID, 'first_name', true) ?: null,
                 'last_name'       => get_user_meta($user->ID, 'last_name', true) ?: null,
@@ -484,13 +484,7 @@ class SolidAffiliate extends BaseMigrator
             $dataToInsert[] = $customerData;
         }
 
-        if (!empty($dataToInsert)) {
-            try {
-                Customer::insert($dataToInsert);
-            } catch (\Exception $e) {
-                // Skip this batch to avoid infinite retry loop
-            }
-        }
+        $this->insertBatch('fa_customers', $dataToInsert);
 
         $status['migrated_customers'] = $migratedCount;
         $this->updateCurrentStatus($status, false);
@@ -556,9 +550,11 @@ class SolidAffiliate extends BaseMigrator
                 continue;
             }
 
-            // Pull all transactions associated with this payout
+            // Pull the transactions of this payout. A failed one never sent the
+            // money, so its referrals stay owed and a new payout can pay them.
             $transactions = $db->table('solid_affiliate_payouts')
                 ->where('bulk_payout_id', $payout->id)
+                ->where('status', '!=', 'failed')
                 ->get()
             ;
 
@@ -572,6 +568,9 @@ class SolidAffiliate extends BaseMigrator
             }
 
             $formattedPayout = [
+                // Keeping the source id is what makes the existing-payout check
+                // above meaningful; an auto-assigned id could never match it.
+                'id'            => $payout->id,
                 'currency'      => $payout->currency ?: null,
                 'payout_method' => isset($payoutMethodMap[$payout->method]) ? $payoutMethodMap[$payout->method] : 'manual',
                 'total_amount'  => $totalPayoutAmount,
@@ -589,10 +588,12 @@ class SolidAffiliate extends BaseMigrator
 
                 // Process each transaction
                 foreach ($transactions as $transaction) {
+                    $affiliateId = $this->mapAffiliateId($transaction->affiliate_id);
+
                     // Check if transaction already exists
                     $existingTransaction = $db->table('fa_payout_transactions')
                         ->where('payout_id', $payoutId)
-                        ->where('affiliate_id', $transaction->affiliate_id)
+                        ->where('affiliate_id', $affiliateId)
                         ->where('total_amount', $transaction->amount)
                         ->first()
                     ;
@@ -602,7 +603,7 @@ class SolidAffiliate extends BaseMigrator
                     }
 
                     $mappedTransaction = [
-                        'affiliate_id'  => $transaction->affiliate_id,
+                        'affiliate_id'  => $affiliateId,
                         'payout_id'     => $payoutId,
                         'total_amount'  => $transaction->amount,
                         'payout_method' => isset($payoutMethodMap[$transaction->payout_method]) ? $payoutMethodMap[$transaction->payout_method] : 'manual',
@@ -635,6 +636,29 @@ class SolidAffiliate extends BaseMigrator
                 }
             } catch (\Exception $e) {
                 // Skip this payout to avoid infinite retry loop
+            }
+        }
+
+        // Solid Affiliate marks a payout's referrals paid when it creates the payout
+        // and keeps them paid when the payout fails, so they are released here
+        $failedTransactionIds = $db->table('solid_affiliate_payouts')
+            ->whereIn('bulk_payout_id', $payoutGroups->pluck('id')->toArray())
+            ->where('status', 'failed')
+            ->pluck('id')
+            ->toArray();
+
+        if ($failedTransactionIds) {
+            $failedReferralIds = $db->table('solid_affiliate_referrals')
+                ->whereIn('payout_id', $failedTransactionIds)
+                ->pluck('id')
+                ->toArray();
+
+            if ($failedReferralIds) {
+                $db->table('fa_referrals')
+                    ->whereIn('id', $failedReferralIds)
+                    ->where('status', 'paid')
+                    ->whereNull('payout_transaction_id')
+                    ->update(['status' => 'unpaid']);
             }
         }
 
@@ -700,11 +724,8 @@ class SolidAffiliate extends BaseMigrator
             $dataToInsert[] = $data;
         }
         
-        try {
-            AffiliateGroup::insert($dataToInsert);
-        } catch (\Exception $e) {
-            // Skip this batch to avoid infinite retry loop
-        }
+        // Rows carry their own object_type, matching what the model would set.
+        $this->insertBatch('fa_meta', $dataToInsert);
 
         $status['migrated_affiliate_groups'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -788,6 +809,8 @@ class SolidAffiliate extends BaseMigrator
         ;
 
         if ($visits->isEmpty()) {
+            $this->resetAutoIncrement('fa_visits');
+
             // Stay in the 'visits' stage until the paginated recount fully completes;
             // advancing early would leave affiliates past the recount cursor at zero earnings.
             if ($this->recountAffiliateEarnings()) {
@@ -798,16 +821,26 @@ class SolidAffiliate extends BaseMigrator
             return $status;
         }
 
+        $existingIds = array_flip($this->db()->table('fa_visits')
+            ->whereIn('id', $visits->pluck('id')->toArray())
+            ->pluck('id')
+            ->toArray()
+        );
+
         $visitItems = [];
         foreach ($visits as $visit) {
             $lastId = $visit->id;
 
+            if (isset($existingIds[$visit->id])) {
+                continue;
+            }
+
             $data = [
                 'id'           => $visit->id,
-                'affiliate_id' => $visit->affiliate_id,
+                'affiliate_id' => $this->mapAffiliateId($visit->affiliate_id),
                 'referral_id'  => $visit->referral_id ?: null,
-                'url'          => $visit->landing_url ?: null,
-                'referrer'     => $visit->http_referrer ?: null,
+                'url'          => $visit->landing_url ? sanitize_url($visit->landing_url) : null,
+                'referrer'     => $visit->http_referrer ? sanitize_url($visit->http_referrer) : null,
                 'ip'           => $visit->http_ip ?: null,
                 'utm_campaign' => null,
                 'created_at'   => $visit->created_at,
@@ -816,11 +849,7 @@ class SolidAffiliate extends BaseMigrator
             $visitItems[] = $data;
         }
         
-        try {
-            $this->db()->table('fa_visits')->insert($visitItems);
-        } catch (\Exception $e) {
-            // Skip this batch to avoid infinite retry loop
-        }
+        $this->insertBatch('fa_visits', $visitItems);
 
         $status['migrated_visits'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -832,7 +861,7 @@ class SolidAffiliate extends BaseMigrator
         return $this->migrateVisits($status);
     }
 
-    public function getCounts()
+    protected function getSourceCounts()
     {
         $db = $this->db();
 
@@ -942,13 +971,13 @@ class SolidAffiliate extends BaseMigrator
 
             $dataToInsert[] = [
                 'name'        => $creative->name,
-                'description' => $creative->description ?: null,
+                'description' => $creative->description ? sanitize_text_field($creative->description) : null,
                 // Solid has no type column, so the banner image decides between
                 // FA's image and text creatives.
                 'type'        => $creative->creative_image_url ? 'image' : 'text',
-                'image'       => $creative->creative_image_url ?: null,
+                'image'       => $creative->creative_image_url ? sanitize_url($creative->creative_image_url) : null,
                 'text'        => $creative->creative_text ?: null,
-                'url'         => $creative->url ?: null,
+                'url'         => $creative->url ? sanitize_url($creative->url) : null,
                 'privacy'     => 'public',
                 'status'      => ($creative->status === 'inactive') ? 'inactive' : 'active',
                 'created_at'  => $creative->created_at,
@@ -956,13 +985,7 @@ class SolidAffiliate extends BaseMigrator
             ];
         }
 
-        try {
-            if (!empty($dataToInsert)) {
-                $db->table('fa_creatives')->insert($dataToInsert);
-            }
-        } catch (\Exception $e) {
-            // Skip this batch to avoid blocking the rest of the migration
-        }
+        $this->insertBatch('fa_creatives', $dataToInsert);
 
         $status['migrated_creatives'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -974,11 +997,4 @@ class SolidAffiliate extends BaseMigrator
         return $this->migrateCreatives($status);
     }
 
-    private function hasTable($tableName)
-    {
-        $wpdb = $GLOBALS['wpdb'];
-        $fullName = $wpdb->prefix . $tableName;
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema check; result not worth caching
-        return (bool) $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->esc_like($fullName)));
-    }
 }

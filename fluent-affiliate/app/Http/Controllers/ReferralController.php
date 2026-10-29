@@ -2,9 +2,11 @@
 
 namespace FluentAffiliate\App\Http\Controllers;
 
+use FluentAffiliate\App\Helper\Helper;
 use FluentAffiliate\App\Helper\Sanitizer;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\Referral;
+use FluentAffiliate\App\Services\PermissionManager;
 use FluentAffiliate\Framework\Http\Request\Request;
 use FluentAffiliate\Framework\Support\Arr;
 
@@ -12,14 +14,15 @@ class ReferralController extends Controller
 {
     public function index(Request $request)
     {
-        $referrals = Referral::query()->with(['affiliate'])
+        $referrals = Referral::query()->with(['affiliate' => Affiliate::identityOnly()])
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
             ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'created_at'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'))
-            ->paginate($request->getSafe('per_page', 'intval', 10));
+            ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 10)));
 
         foreach ($referrals as $referral) {
             $referral->provider_url = $referral->getProviderReferenceUrl();
+            $referral->hold_until = $referral->getHoldUntil();
         }
 
         return [
@@ -30,7 +33,18 @@ class ReferralController extends Controller
 
     public function show($id)
     {
-        $referral = Referral::query()->with(['visit', 'payout', 'customer'])->findOrFail($id);
+        // the visit and payout rows belong to their own permissions
+        $relations = ['customer'];
+
+        if (PermissionManager::hasVisitAccess()) {
+            $relations[] = 'visit';
+        }
+
+        if (PermissionManager::hasPayoutAccess(true)) {
+            $relations[] = 'payout';
+        }
+
+        $referral = Referral::query()->with($relations)->findOrFail($id);
 
         // Add provider URL
         $referral->provider_url = apply_filters(
@@ -38,6 +52,8 @@ class ReferralController extends Controller
             '',
             $referral
         );
+
+        $referral->hold_until = $referral->getHoldUntil();
 
         return [
             'referral' => $referral
@@ -82,6 +98,9 @@ class ReferralController extends Controller
             do_action('fluent_affiliate/referral_created', $newReferral);
         }
 
+        // listeners can load the full affiliate, which a referral manager may not see
+        $newReferral->unsetRelation('affiliate');
+
         return [
             'referral' => $newReferral,
             'message'  => __('Manual Referral has been created', 'fluent-affiliate'),
@@ -95,6 +114,12 @@ class ReferralController extends Controller
         if ($referral->status == 'paid') {
             return $this->sendError([
                 'message' => __('You cannot update a paid referral.', 'fluent-affiliate')
+            ]);
+        }
+
+        if ($referral->isInPayout()) {
+            return $this->sendError([
+                'message' => __('This referral is in a payout that is being paid. You can change it after the payout finishes.', 'fluent-affiliate')
             ]);
         }
 
@@ -128,6 +153,8 @@ class ReferralController extends Controller
             $affiliate->recountEarnings();
         }
 
+        $referral->unsetRelation('affiliate');
+
         return [
             'referral' => $referral,
             'message'  => __('Referral has been updated', 'fluent-affiliate'),
@@ -136,7 +163,10 @@ class ReferralController extends Controller
 
     public function export(Request $request)
     {
-        $refQuery = Referral::query()->with(['affiliate.user'])
+        // the affiliate email belongs to affiliate access, not referral access
+        $withEmail = PermissionManager::hasAffiliateAccess(true);
+
+        $refQuery = Referral::query()->with($withEmail ? ['affiliate.user'] : ['affiliate' => Affiliate::identityOnly()])
         ->searchBy($request->getSafe('search', 'sanitize_text_field'))
         ->byStatus($request->getSafe('status', 'sanitize_text_field'))
         ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'created_at'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'));
@@ -148,20 +178,20 @@ class ReferralController extends Controller
 
         $referrals = $refQuery->take($limit)->get();
 
-        $referrals = $referrals->map(function ($referral) {
+        $referrals = $referrals->map(function ($referral) use ($withEmail) {
             $user = $referral->affiliate ? $referral->affiliate->user : null;
             return [
                 'id'              => (int) $referral->id,
                 'affiliate_name'  => Sanitizer::forCsv($user ? $user->full_name : ''),
-                'affiliate_email' => Sanitizer::forCsv($user ? $user->user_email : ''),
-                'amount'          => $referral->amount,
-                'order_total'     => $referral->order_total,
-                'currency'        => $referral->currency,
+                'affiliate_email' => Sanitizer::forCsv($user && $withEmail ? $user->user_email : ''),
+                'amount'          => Sanitizer::amountForCsv($referral->amount),
+                'order_total'     => Sanitizer::amountForCsv($referral->order_total),
+                'currency'        => Sanitizer::forCsv($referral->currency),
                 'description'     => Sanitizer::forCsv($referral->description ?? ''),
                 'provider'        => Sanitizer::forCsv($referral->provider ?? ''),
                 'provider_id'     => $referral->provider_id,
-                'type'            => $referral->type,
-                'status'          => $referral->status,
+                'type'            => Sanitizer::forCsv($referral->type),
+                'status'          => Sanitizer::forCsv($referral->status),
                 'created_at'      => (string) $referral->created_at,
             ];
         });
@@ -176,6 +206,20 @@ class ReferralController extends Controller
     public function destroy($id)
     {
         $referral = Referral::query()->findOrFail($id);
+
+        if ($referral->isInPayout()) {
+            return $this->sendError([
+                'message' => __('This referral is in a payout that is being paid. You can delete it after the payout finishes.', 'fluent-affiliate')
+            ]);
+        }
+
+        // the payout keeps its total, so deleting a referral it paid would leave
+        // money recorded for a commission that no longer exists
+        if ($referral->status === 'paid' || $referral->payout_transaction_id) {
+            return $this->sendError([
+                'message' => __('This referral is paid or in a payout, so it cannot be deleted.', 'fluent-affiliate')
+            ]);
+        }
 
         $affiliate = $referral->affiliate;
 

@@ -33,6 +33,8 @@ trait CompilesJsonPaths
      */
     protected function wrapJsonPath($value, $delimiter = '->')
     {
+        // Escape single quotes for SQL: a ' and any backslashes right before
+        // it become two quotes, so "o'neil" and "o\'neil" both give "o''neil".
         $value = preg_replace("/([\\\\]+)?\\'/", "''", $value);
 
         $jsonPath = Helper::collect(explode($delimiter, $value))
@@ -50,6 +52,8 @@ trait CompilesJsonPaths
      */
     protected function wrapJsonPathSegment($segment)
     {
+        // Find array indexes such as [0] or [1][2] at the end of the
+        // segment: 'tags[0]' gives '[0]', leaving the key 'tags'.
         if (preg_match('/(\[[^\]]+\])+$/', $segment, $parts)) {
             $key = Str::beforeLast($segment, $parts[0]);
 

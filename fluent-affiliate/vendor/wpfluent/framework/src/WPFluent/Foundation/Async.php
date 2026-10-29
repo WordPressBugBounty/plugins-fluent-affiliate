@@ -50,6 +50,14 @@ class Async
 	];
 
 	/**
+	 * How long a signed job is accepted, in seconds. It only has to cover
+	 * the trip from the dispatching request to the async one.
+	 * 
+	 * @var int
+	 */
+	const SIGNATURE_LIFETIME = 600;
+
+	/**
 	 * Creates the instance
 	 * 
 	 * @return self
@@ -98,15 +106,22 @@ class Async
 		$post = self::$app->request->post();
 
 		$this->verifyRequest(self::$app, $post);
-		
-		$handlers = Arr::get($post, 'handlers', []);
 
-		foreach ($handlers as $handler) {
+		// Every job is checked on arrival, before any of them runs, so a
+		// long job never pushes the ones after it past their expiry.
+		$jobs = [];
+
+		foreach ((array) Arr::get($post, 'handlers', []) as $handler) {
 			try {
-				[$class, $action] = $this->resolveHandler($handler);
+				$jobs[] = $this->resolveHandler($handler);
+			} catch (Exception $e) {
+				error_log($e->getMessage());
+			}
+		}
 
-				$this->execute(self::$app, $class, $action['params'] ?? []);
-
+		foreach ($jobs as [$class, $params]) {
+			try {
+				$this->execute(self::$app, $class, $params);
 			} catch (Exception $e) {
 				error_log($e->getMessage());
 			}
@@ -133,28 +148,66 @@ class Async
 	}
 
 	/**
-	 * Resolve the action handler.
+	 * Resolve a job this server signed into its handler and params.
+	 *
+	 * The signature is checked before the handler is looked at, so a job
+	 * that did not come from this site never loads or runs any class.
 	 * 
-	 * @param  array $action
-	 * @return array
+	 * @param  mixed $action
+	 * @return array [Class@method, params]
+	 *
+	 * @throws \InvalidArgumentException
 	 */
 	protected function resolveHandler($action)
 	{
-		if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new InvalidArgumentException("Invalid action.");
-        }
+		$fields = ['handler', 'params', 'time', 'signature'];
 
-        $handler = base64_decode($action['handler']);
+		foreach ($fields as $field) {
+			if (!is_string($action[$field] ?? null)) {
+				throw new InvalidArgumentException('Invalid async job.');
+			}
+		}
 
-        [$class, $method] = explode('@', $handler);
+		[$handler, $params, $time, $signature] = array_map(
+			fn ($field) => $action[$field], $fields
+		);
 
-        if (!class_exists($class)) {
-            throw new InvalidArgumentException(
-            	"Handler {$class} does not exist."
-            );
-        }
+		if (!hash_equals($this->signature($handler, $params, $time), $signature)) {
+			throw new InvalidArgumentException('Invalid async job signature.');
+		}
 
-        return [$class.'@'.$method, $action];
+		if (time() - (int) $time > static::SIGNATURE_LIFETIME) {
+			throw new InvalidArgumentException('Expired async job.');
+		}
+
+		$handler = base64_decode($handler);
+
+		[$class] = explode('@', $handler);
+
+		if (!class_exists($class)) {
+			throw new InvalidArgumentException(
+				"Handler {$class} does not exist."
+			);
+		}
+
+		return [$handler, json_decode($params, true) ?? []];
+	}
+
+	/**
+	 * Sign a job so the async request can prove this site queued it.
+	 *
+	 * @param  string $handler
+	 * @param  string $params
+	 * @param  string $time
+	 * @return string
+	 */
+	protected function signature($handler, $params, $time)
+	{
+		return hash_hmac(
+			'sha256',
+			implode('|', [$this->makeAsyncHookAction(), $handler, $time, $params]),
+			wp_salt('auth')
+		);
 	}
 
 	/**
@@ -271,6 +324,12 @@ class Async
 			);	
 		}
 
+		if (json_encode($params) === false) {
+			throw new InvalidArgumentException(
+				'Async params must be JSON encodable: ' . json_last_error_msg()
+			);
+		}
+
 		$handler = $handler.'@'.$method;
 
 		return [
@@ -297,70 +356,52 @@ class Async
 	}
 
 	/**
-	 * Dispatches the async request
+	 * Dispatches the async requests: one per named queue, carrying all of
+	 * its jobs, and one per job added with call().
 	 * 
 	 * @return void
 	 */
 	public function dispatch()
 	{
-		$stacks = array_filter([
-			array_filter(self::$queue),
-			array_filter(self::$handlers),
-		]);
+		// Every job is marked as dispatched before any request is sent, so
+		// a job that queues itself again from its own request is skipped.
+		$requests = [];
 
-		// At first we need to mark all the handlers from all
-		// the stacks as dispatched before sending any request.
-		foreach ($stacks as $key => $stack) {
-			$stacks[$key] = $this->getDispatchables($stack);
+		foreach (array_filter(self::$queue) as $jobs) {
+			if ($jobs = $this->getDispatchables($jobs)) {
+				$requests[] = $jobs;
+			}
 		}
 
-		// Now we can dispatch them all
-		foreach ($stacks as $stack) {
-			foreach ($stack as $handler) {
-				$this->sendAsyncRequest($this->wrap($handler));
-			}
+		foreach ($this->getDispatchables(self::$handlers) as $job) {
+			$requests[] = [$job];
+		}
+
+		foreach ($requests as $jobs) {
+			$this->sendAsyncRequest($jobs);
 		}
 	}
 
 	/**
-	 * Filter the handlers to be dispatched.
+	 * Keep the jobs that were not already dispatched by the request that
+	 * sent this one.
 	 * 
-	 * @param  array $stack
-	 * @return array|null
+	 * @param  array $jobs
+	 * @return array
 	 */
-	protected function getDispatchables($stack)
+	protected function getDispatchables($jobs)
 	{
-		// If the stack is an array of associtive arrays we
-		// need to get the first one because queued handlers
-		// will containn one associtive array in the stack.
-		$stack = !isset($stack[0]) ? reset($stack) : $stack;
+		$dispatched = (array) self::$app->request->post('dispatched', []);
 
-		return array_filter($stack, function ($handler) {
-			if (isset($handler['sign'])) {
-				$isDispatched = in_array(
-					$handler['sign'],
-					self::$app->request->post('dispatched', [])
-				);
-
-				if (!$isDispatched) {
-					$this->dispatched[] = $handler['sign'];
-					return !$isDispatched;
-				}
+		return array_values(array_filter($jobs, function ($job) use ($dispatched) {
+			if (!isset($job['sign']) || in_array($job['sign'], $dispatched, true)) {
+				return false;
 			}
-		});
-	}
 
-	/**
-	 * Wrap with an array if necessary. Only used for separate
-	 * handlers because queued handlers will be an array of
-	 * associative arrays and we treat all the stacks same.
-	 * 
-	 * @param  array $handlers
-	 * @return array of array(s)
-	 */
-	protected function wrap($handlers)
-	{
-		return isset($handlers[0]) ? $handlers : [$handlers];
+			$this->dispatched[] = $job['sign'];
+
+			return true;
+		}));
 	}
 
 	/**
@@ -393,7 +434,7 @@ class Async
 		$post = self::$app->request->post();
 
 		$data = [
-	        'handlers' => $handler,
+	        'handlers' => array_map([$this, 'signJob'], $handler),
 	        'wpfluent_async_nonce' => wp_create_nonce(
 	        	self::$app->config->get('app.slug')
 	        ),
@@ -406,6 +447,24 @@ class Async
 		return array_merge($data, Arr::except($post, [
 		    'handlers', 'wpfluent_async_nonce', 'dispatched'
 		]));
+	}
+
+	/**
+	 * Add the params as JSON, the time and the signature to a job.
+	 *
+	 * @param  array $job
+	 * @return array
+	 */
+	protected function signJob(array $job)
+	{
+		$job['params'] = json_encode($job['params']);
+		$job['time'] = (string) time();
+
+		$job['signature'] = $this->signature(
+			$job['handler'], $job['params'], $job['time']
+		);
+
+		return $job;
 	}
 
 	/**

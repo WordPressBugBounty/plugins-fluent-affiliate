@@ -140,13 +140,18 @@ class CreateAffiliateAction extends BaseAction
 
         $rateType = Arr::get($sequence->settings, 'rate_type', 'default');
 
+        // the action's "Fixed Amount" option is saved as 'Flat Rate'
+        if ($rateType === 'Flat Rate') {
+            $rateType = 'flat';
+        }
+
         $paymentEmail = Arr::get($sequence->settings, 'payment_email', '');
 
         $affiliateData = array_filter([
             'rate'          => $rateType !== 'default' ? Arr::get($sequence->settings, 'rate_value') : null,
             'rate_type'     => $rateType,
             'status'        => Arr::get($sequence->settings, 'affiliate_status', 'active'),
-            'note'          => Arr::get($sequence->settings, 'rate', ''),
+            'note'          => sanitize_textarea_field(Arr::get($sequence->settings, 'note', '')),
             'payment_email' => $paymentEmail ? sanitize_email($paymentEmail) : '',
         ]);
 

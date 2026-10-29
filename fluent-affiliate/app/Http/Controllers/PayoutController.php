@@ -12,6 +12,7 @@ use FluentAffiliate\App\Helper\Utility;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\Referral;
 use FluentAffiliate\App\Models\Payout;
+use FluentAffiliate\App\Models\User;
 
 class PayoutController extends Controller
 {
@@ -28,12 +29,13 @@ class PayoutController extends Controller
                 $request->getSafe('order_by', 'sanitize_sql_orderby', 'id'),
                 $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC')
             )
-            ->paginate($request->getSafe('per_page', 'intval', 10));
+            ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 10)));
 
         foreach ($payouts as $payout) {
             $payout->referrals_count = $payout->referrals()->count();
             $payout->transactions_count = $payout->transactions()->count();
             $payout->affiliates_count = $payout->affiliates()->count();
+            $payout->failed_count = $payout->transactions()->where('status', 'failed')->count();
         }
 
         return [
@@ -48,9 +50,16 @@ class PayoutController extends Controller
      */
     public function show(Request $request, $id)
     {
-        $payout = Payout::query()->with('creator')->findOrFail($id);
+        // payout readers see who created the payout, not that user's account
+        $payout = Payout::query()->with(['creator' => User::nameOnly()])->findOrFail($id);
         $payout->referrals_count = $payout->referrals()->count();
         $payout->transactions_count = $payout->transactions()->count();
+        // a gateway sends only the open rows, so its confirmation counts those
+        $payout->processing_count = $payout->transactions()->where('status', 'processing')->count();
+        $payout->processing_amount = (float) $payout->transactions()->where('status', 'processing')->sum('total_amount');
+
+        // a gateway adds the state only its server can decide, such as what the admin may do next
+        $payout = apply_filters('fluent_affiliate/payout/details', $payout);
 
         return [
             'payout' => $payout,
@@ -92,17 +101,18 @@ class PayoutController extends Controller
         $config = $request->get('config', []);
 
         $this->validate($config, [
-            'title'         => 'required|string|max:255',
-            'description'   => 'required|string',
-            'affiliate_ids' => 'nullable|array',
-            'start_date'    => 'nullable|string',
-            'end_date'      => 'nullable|string',
-            'min_payout'    => 'nullable|min:0',
+            'title'                 => 'required|string|max:255',
+            'description'           => 'required|string',
+            'affiliate_ids'         => 'nullable|array',
+            'start_date'            => 'nullable|string',
+            'end_date'              => 'nullable|string',
+            'min_payout'            => 'nullable|numeric|min:0',
+            'ignore_holding_period' => 'nullable|in:yes,no',
         ]);
 
         $startDate = Arr::get($config, 'start_date');
         $endDate = Arr::get($config, 'end_date');
-        $minAmount = Arr::get($config, 'min_payout', 0);
+        $minAmount = (float) Arr::get($config, 'min_payout', 0);
 
         if (!$startDate) {
             $startDate = '1970-01-01 00:00:00';
@@ -122,15 +132,64 @@ class PayoutController extends Controller
             ]);
         }
 
+        $affiliateIds = (array) Arr::get($config, 'affiliate_ids', []);
+        $affiliateIds = array_map('intval', $affiliateIds);
+
+        global $wpdb;
+
+        // referrals inside the holding period are not payable yet. Moving the end date
+        // back covers the preview and the claim in processPayout(), which reads these dates
+        $held = [
+            'count'        => 0,
+            'total_amount' => 0,
+        ];
+
+        $holdingDays = (int) Utility::getReferralSetting('holding_days', 0);
+        // the admin can pay the held referrals too; with no holding period there is nothing to ignore
+        $ignoreHold = $holdingDays > 0 && Arr::get($config, 'ignore_holding_period') === 'yes';
+        if ($holdingDays > 0 && !$ignoreHold) {
+            // created_at is written in site time, so the cutoff is built the same way
+            $holdCutoff = gmdate('Y-m-d H:i:s', current_time('timestamp') - $holdingDays * DAY_IN_SECONDS);
+
+            if (strtotime($endDate) > strtotime($holdCutoff)) {
+                $heldTotals = Affiliate::query()
+                    ->select(
+                        FluentAffiliate('db')->raw('COUNT(' . $wpdb->prefix . 'fa_referrals.id) as held_count'),
+                        FluentAffiliate('db')->raw('SUM(' . $wpdb->prefix . 'fa_referrals.amount) as held_amount')
+                    )
+                    ->join('fa_referrals', 'fa_affiliates.id', '=', 'fa_referrals.affiliate_id')
+                    ->where('fa_referrals.status', 'unpaid')
+                    ->whereNull('fa_referrals.payout_transaction_id')
+                    ->where('fa_referrals.created_at', '>', max($startDate, $holdCutoff))
+                    ->where('fa_referrals.created_at', '<=', $endDate)
+                    ->when($affiliateIds, function ($query) use ($affiliateIds) {
+                        return $query->whereIn('fa_affiliates.id', $affiliateIds);
+                    })
+                    ->when(!$affiliateIds, function ($query) {
+                        return $query->where('fa_affiliates.status', 'active');
+                    })
+                    ->whereHas('user')
+                    ->first();
+
+                $held = [
+                    'count'        => $heldTotals ? (int) $heldTotals->held_count : 0,
+                    'total_amount' => $heldTotals ? (float) $heldTotals->held_amount : 0,
+                ];
+
+                $endDate = $holdCutoff;
+            }
+
+            if (strtotime($startDate) > strtotime($endDate)) {
+                return $this->sendError([
+                    'message' => __('All referrals in this date range are still in the holding period.', 'fluent-affiliate'),
+                ]);
+            }
+        }
+
         $dateRange = [
             $startDate,
             $endDate
         ];
-
-        $affiliateIds = Arr::get($config, 'affiliate_ids', []);
-        $affiliateIds = array_map('intval', $affiliateIds);
-
-        global $wpdb;
 
         $affiliates = Affiliate::query()
             ->select(
@@ -140,12 +199,22 @@ class PayoutController extends Controller
             )
             ->join('fa_referrals', 'fa_affiliates.id', '=', 'fa_referrals.affiliate_id')
             ->where('fa_referrals.status', 'unpaid')
+            ->whereNull('fa_referrals.payout_transaction_id')
             ->whereBetween('fa_referrals.created_at', $dateRange)
             ->when($affiliateIds, function ($query) use ($affiliateIds) {
                 return $query->whereIn('fa_affiliates.id', $affiliateIds)
                     ->whereIn('fa_referrals.affiliate_id', $affiliateIds);
             })
+            // a payout to all affiliates leaves out inactive and pending ones;
+            // the admin can still pay them by selecting them
+            ->when(!$affiliateIds, function ($query) {
+                return $query->where('fa_affiliates.status', 'active');
+            })
             ->whereHas('user')
+            // the email stays for the avatar
+            ->with(['user' => function ($query) {
+                $query->select(['ID', 'display_name', 'user_email']);
+            }])
             ->groupBy('fa_affiliates.id')
             ->havingRaw('SUM(' . $wpdb->prefix . 'fa_referrals.amount) > ?', [$minAmount])
             ->orderBy('total_payable_amount', 'DESC')
@@ -153,26 +222,40 @@ class PayoutController extends Controller
 
         $totalAmount = $affiliates->sum('total_payable_amount');
 
-        return [
+        // one filter serves both the review preview and processPayout(), so a
+        // gateway can drop affiliates it cannot pay from both at once
+        return apply_filters('fluent_affiliate/payout/validated_config', [
             'payable_affiliates'   => $affiliates,
             'payable_total_amount' => $totalAmount,
+            'held'                 => $held,
             'config'               => [
-                'start_date'    => $startDate,
-                'end_date'      => $endDate,
-                'min_payout'    => $minAmount,
-                'affiliate_ids' => $affiliateIds,
+                'start_date'     => $startDate,
+                'end_date'       => $endDate,
+                'min_payout'     => $minAmount,
+                'affiliate_ids'  => $affiliateIds,
+                'payout_method'  => static::resolvePayoutMethod($config),
+                'ignore_holding_period' => $ignoreHold ? 'yes' : 'no',
             ]
-        ];
+        ], $config);
+    }
+
+    protected static function resolvePayoutMethod($config)
+    {
+        // an unknown method falls back to manual, as every payout did before
+        $method = sanitize_key((string) Arr::get($config, 'payout_method', 'manual'));
+
+        return array_key_exists($method, Helper::getPayoutMethods()) ? $method : 'manual';
     }
 
     public function processPayout(Request $request)
     {
         $validated = $this->validatePayoutConfig($request);
-        if (empty($validated['payable_affiliates'])) {
-            if ($validated instanceof \WP_REST_Response) {
-                return $validated;
-            }
+        // a validation error is a response object, which cannot be read as an array
+        if ($validated instanceof \WP_REST_Response) {
+            return $validated;
+        }
 
+        if (empty($validated['payable_affiliates'])) {
             return $this->sendError([
                 'message' => __('No affiliates found for the given criteria.', 'fluent-affiliate'),
             ]);
@@ -187,19 +270,30 @@ class PayoutController extends Controller
         $payoutData = [
             'title'         => sanitize_text_field(Arr::get($dataConfig, 'title')),
             'description'   => sanitize_textarea_field(Arr::get($dataConfig, 'description')),
-            'payout_method' => 'manual',
+            'payout_method' => Arr::get($validated, 'config.payout_method', 'manual'),
             'status'        => 'draft',
             'total_amount'  => 0,
             'settings'      => [
                 'start_date'    => $startDate,
                 'end_date'      => $endDate,
                 'min_payout'    => $minPayout,
-                'affiliate_ids' => Arr::get($dataConfig, 'affiliate_ids', []),
+                'affiliate_ids' => Arr::get($validated, 'config.affiliate_ids', []),
             ],
             'created_by'    => get_current_user_id(),
         ];
 
+        if (Arr::get($validated, 'config.ignore_holding_period') === 'yes') {
+            $payoutData['settings']['ignore_holding_period'] = 'yes';
+        }
+
         $payoutData = apply_filters('fluent_affiliate/payout/before_create', $payoutData, $dataConfig, $affiliates);
+
+        // ownership is stored, so it survives the gateway add-on being turned
+        // off and never claims imported rows that share a method slug
+        $isGateway = Helper::isGatewayPayoutMethod(Arr::get($payoutData, 'payout_method'));
+        if ($isGateway) {
+            $payoutData['settings']['gateway'] = true;
+        }
 
         // create an empty payout
         $payout = Payout::create($payoutData);
@@ -215,15 +309,23 @@ class PayoutController extends Controller
         }
 
         $currency = Utility::getCurrency();
+        $payoutMethod = $payout->payout_method ?: 'manual';
+
+        // a manual payout is settled by the admin outside the plugin, so its
+        // referrals are paid now. A gateway payout keeps them processing (and
+        // linked to their transaction) until the gateway reports the money sent.
+        $referralStatus = $isGateway ? 'processing' : 'paid';
 
         foreach ($affiliates as $affiliate) {
             // claim and settle together, so a failure cannot leave referrals
             // stranded in the intermediate processing status
-            $createdTransaction = Helper::dbTransaction(function () use ($affiliate, $payout, $startDate, $endDate, $currency) {
-                // Atomically claim unpaid referrals by setting a temporary lock status
+            $createdTransaction = Helper::dbTransaction(function () use ($affiliate, $payout, $startDate, $endDate, $currency, $payoutMethod, $referralStatus, $isGateway) {
+                // Atomically claim unpaid referrals by setting a temporary lock status.
+                // Rows linked to a transaction (imported payouts) are not claimed.
                 $affectedRows = Referral::query()
                     ->where('affiliate_id', $affiliate->id)
                     ->where('status', 'unpaid')
+                    ->whereNull('payout_transaction_id')
                     ->whereBetween('created_at', [$startDate, $endDate])
                     ->update(['status' => 'processing']);
 
@@ -231,10 +333,11 @@ class PayoutController extends Controller
                     return null;
                 }
 
-                // Now read the claimed referrals (status = 'processing')
+                // read back this claim only; in-flight gateway rows already have a transaction
                 $referrals = Referral::query()
                     ->where('affiliate_id', $affiliate->id)
                     ->where('status', 'processing')
+                    ->whereNull('payout_transaction_id')
                     ->whereBetween('created_at', [$startDate, $endDate])
                     ->get();
 
@@ -254,11 +357,12 @@ class PayoutController extends Controller
                 $eachTransaction = [
                     'affiliate_id'  => $affiliate->id,
                     'payout_id'     => $payout->id,
-                    'payout_method' => 'manual',
+                    'payout_method' => $payoutMethod,
                     'status'        => 'processing',
                     'currency'      => $currency,
                     'total_amount'  => $transactionData['total_amount'],
                     'created_by'    => get_current_user_id(),
+                    'settings'      => $isGateway ? ['gateway' => true] : null,
                 ];
 
                 $createdTransaction = Transaction::create($eachTransaction);
@@ -267,7 +371,7 @@ class PayoutController extends Controller
                     ->update([
                         'payout_transaction_id' => $createdTransaction->id,
                         'payout_id'             => $payout->id,
-                        'status'                => 'paid'
+                        'status'                => $referralStatus
                     ]);
 
                 return $createdTransaction;
@@ -276,6 +380,15 @@ class PayoutController extends Controller
             if ($createdTransaction) {
                 $affiliate->recountEarnings();
             }
+        }
+
+        // another payout claimed every referral first, e.g. a double submit
+        if (!Transaction::query()->where('payout_id', $payout->id)->exists()) {
+            $payout->delete();
+
+            return $this->sendError([
+                'message' => __('No unpaid referrals were left to pay. They may already be in another payout.', 'fluent-affiliate'),
+            ]);
         }
 
         $totalAmount = Transaction::query()
@@ -291,7 +404,9 @@ class PayoutController extends Controller
 
         return [
             'payout'  => $payout,
-            'message' => __('Payout successfully created and marked as processing. Please complete the transactions now', 'fluent-affiliate'),
+            'message' => $isGateway
+                ? __('The payout is created. No money moves yet. To pay the affiliates, send the payout on this page.', 'fluent-affiliate')
+                : __('Payout successfully created and marked as processing. Please complete the transactions now', 'fluent-affiliate'),
         ];
     }
 
@@ -299,15 +414,16 @@ class PayoutController extends Controller
     {
         $payout = Payout::query()->findOrFail($payoutId);
 
+        // the payment email is payout data; the WordPress account is not
         $transactions = Transaction::query()->where('payout_id', $payout->id)
-            ->with(['affiliate'])
+            ->with(['affiliate.user' => User::nameOnly()])
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
             ->orderBy(
                 $request->getSafe('order_by', 'sanitize_sql_orderby', 'id'),
                 $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC')
             )
-            ->paginate($request->getSafe('per_page', 'intval', 10));
+            ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 10)));
 
         return [
             'transactions'     => $transactions,
@@ -336,15 +452,58 @@ class PayoutController extends Controller
             ];
         }
 
-        $transaction->status = $newStatus;
-        $transaction->save();
-        $payout = $payout->recountPaymentTotal();
-        do_action('fluent_affiliate/payout/transaction/transaction_updated_to_' . $transaction->status, $transaction, $payout);
+        // the gateway pays its own transactions; the admin steps in only after
+        // the gateway reports one failed, and then only to settle it by hand
+        if (!$transaction->isManual() && ($newStatus !== 'paid' || $transaction->status !== 'failed')) {
+            return $this->sendError([
+                'message' => __('This transaction is paid through a payout gateway. You can mark it as paid by hand only after the gateway reports it failed.', 'fluent-affiliate'),
+            ]);
+        }
+
+        if (!$transaction->isManual()) {
+            // settle on freshly locked rows (payout, then transaction), so a send
+            // cannot start or report back while the admin settles by hand. The
+            // recounts and the paid hook run after the commit, off the locks.
+            $result = Helper::dbTransaction(function () use ($transaction, $payout) {
+                $lockedPayout = Payout::query()->where('id', $payout->id)->lockForUpdate()->first();
+                $lockedTransaction = Transaction::query()->where('id', $transaction->id)->lockForUpdate()->first();
+
+                if (!$lockedPayout || !$lockedTransaction || $lockedTransaction->status !== 'failed') {
+                    return __('This transaction changed meanwhile. Reload the page and try again.', 'fluent-affiliate');
+                }
+
+                if ($lockedPayout->status === 'sending') {
+                    return __('The payout gateway is sending this payout. You can mark this transaction as paid after the send ends.', 'fluent-affiliate');
+                }
+
+                return $lockedTransaction->settle();
+            });
+
+            if (is_string($result)) {
+                return $this->sendError([
+                    'message' => $result
+                ]);
+            }
+
+            $transaction->afterSettle($result[0], $result[1]);
+        } else if ($newStatus === 'paid') {
+            $transaction->markAsPaid($payout);
+        } else {
+            $transaction->status = $newStatus;
+            $transaction->save();
+            $payout = $payout->recountPaymentTotal();
+            do_action('fluent_affiliate/payout/transaction/transaction_updated_to_' . $transaction->status, $transaction, $payout);
+
+            // the affiliate can be gone (deleted before payouts were protected),
+            // and its transaction still has to be settable
+            $affiliate = Affiliate::query()->find($transaction->affiliate_id);
+            $affiliate && $affiliate->recountEarnings();
+        }
 
         $processingCount = $payout->transactions()->where('status', 'processing')->count();
 
-        $affiliate = Affiliate::query()->findOrFail($transaction->affiliate_id);
-        $affiliate->recountEarnings();
+        // the paid hook and the recount can load the full affiliate
+        $transaction->unsetRelation('affiliate');
 
         return [
             'transaction'      => $transaction,
@@ -356,6 +515,12 @@ class PayoutController extends Controller
     public function bulkPatchTransactions(Request $request, $payoutId)
     {
         $payout = Payout::findOrFail($payoutId);
+
+        if (Arr::get((array) $payout->settings, 'gateway')) {
+            return $this->sendError([
+                'message' => __('The transactions of this payout are paid through a payout gateway, so they cannot be marked as paid in bulk.', 'fluent-affiliate'),
+            ]);
+        }
 
         $processingTransactions = Transaction::query()
             ->where('payout_id', $payout->id)
@@ -382,20 +547,11 @@ class PayoutController extends Controller
                 ];
             }
 
-            if ($transaction->status !== 'processing') {
+            if ($transaction->status !== 'processing' || !$transaction->isManual()) {
                 continue;
             }
 
-            $transaction->status = 'paid';
-            $transaction->save();
-            $payout = $payout->recountPaymentTotal();
-
-            $affiliate = Affiliate::find($transaction->affiliate_id);
-            if ($affiliate) {
-                $affiliate->recountEarnings();
-            }
-
-            do_action('fluent_affiliate/payout/transaction/transaction_updated_to_' . $transaction->status, $transaction, $payout);
+            $transaction->markAsPaid($payout);
         }
 
         $newCount = Transaction::query()
@@ -417,21 +573,59 @@ class PayoutController extends Controller
             ->where('payout_id', $payout->id)
             ->findOrFail($transactionId);
 
-        do_action('fluent_affiliate/payout/transaction/deleting', $transaction, $payout);
-        $affiliate = Affiliate::query()->findOrFail($transaction->affiliate_id);
-
-        // get the total amount of the these referrals
-        Referral::query()
-            ->where('payout_transaction_id', $transaction->id)
-            ->update([
-                'payout_transaction_id' => null,
-                'payout_id'             => null,
-                'status'                => 'unpaid',
+        if ($transaction->status === 'paid') {
+            return $this->sendError([
+                'message' => __('A paid transaction cannot be deleted. Mark it as processing first.', 'fluent-affiliate')
             ]);
+        }
 
-        $transaction->delete();
+        // removing a row the gateway may still pay would let its referrals be
+        // paid a second time by the next payout
+        if ($transaction->isLockedByGateway($payout)) {
+            return $this->sendError([
+                'message' => __('The payout gateway may still pay this transaction. You can remove it only after the gateway reports it failed.', 'fluent-affiliate')
+            ]);
+        }
+
+        do_action('fluent_affiliate/payout/transaction/deleting', $transaction, $payout);
+        // the affiliate can be gone (deleted before payouts were protected),
+        // and its transaction still has to be removable
+        $affiliate = Affiliate::query()->find($transaction->affiliate_id);
+
+        // re-check on freshly locked rows (payout, then transaction), so a gateway
+        // send or a settlement that lands meanwhile cannot have its referrals released
+        $blocked = Helper::dbTransaction(function () use ($transaction, $payout) {
+            $lockedPayout = Payout::query()->where('id', $payout->id)->lockForUpdate()->first();
+            $lockedTransaction = Transaction::query()->where('id', $transaction->id)->lockForUpdate()->first();
+
+            if (!$lockedPayout || !$lockedTransaction || $lockedTransaction->status === 'paid') {
+                return __('This transaction was paid meanwhile, so it cannot be deleted. Mark it as processing first.', 'fluent-affiliate');
+            }
+
+            if ($lockedTransaction->isLockedByGateway($lockedPayout)) {
+                return __('The payout gateway may still pay this transaction. You can remove it only after the gateway reports it failed.', 'fluent-affiliate');
+            }
+
+            Referral::query()
+                ->where('payout_transaction_id', $lockedTransaction->id)
+                ->update([
+                    'payout_transaction_id' => null,
+                    'payout_id'             => null,
+                    'status'                => 'unpaid',
+                ]);
+
+            $lockedTransaction->delete();
+
+            return '';
+        });
+
+        if ($blocked) {
+            return $this->sendError([
+                'message' => $blocked
+            ]);
+        }
         // recount the affiliates
-        $affiliate->recountEarnings();
+        $affiliate && $affiliate->recountEarnings();
         $payout = $payout->recountPaymentTotal();
         do_action('fluent_affiliate/payout/transaction/deleted', $transactionId, $payout);
 
@@ -448,7 +642,7 @@ class PayoutController extends Controller
         Payout::query()->findOrFail($payoutId);
 
         $referrals = Referral::query()->where('payout_id', $payoutId)
-            ->with(['affiliate'])
+            ->with(['affiliate' => Affiliate::identityOnly()])
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->orderBy(
                 $request->getSafe('order_by', 'sanitize_sql_orderby', 'id'),
@@ -457,7 +651,7 @@ class PayoutController extends Controller
             ->when($affiliateId, function ($query) use ($affiliateId) {
                 return $query->where('affiliate_id', $affiliateId);
             })
-            ->paginate($request->getSafe('per_page', 'intval', 10));
+            ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 10)));
 
         foreach ($referrals as $referral) {
             $referral->provider_url = $referral->getProviderUrl();
@@ -469,11 +663,13 @@ class PayoutController extends Controller
         ];
 
         if ($request->get('with_affiliate_lists') === 'yes') {
+            // this route is open to referral readers, so the filter list only names
+            // the affiliates
             $affiliates = Affiliate::query()
+                ->tap(Affiliate::identityOnly())
                 ->whereHas('referrals', function ($query) use ($payoutId) {
                     $query->where('payout_id', $payoutId);
                 })
-                ->with(['user'])
                 ->get();
 
             $data['affiliate_lists'] = $affiliates;
@@ -485,6 +681,10 @@ class PayoutController extends Controller
     public function getExportableTransactions(Request $request, $payoutId)
     {
         $payout = Payout::findOrFail($payoutId);
+
+        if ($request->getSafe('format', 'sanitize_key') === 'paypal') {
+            return $this->getPayPalPayoutsFile($payout);
+        }
 
         $limit = apply_filters('fluent_affiliate/data_export_limit', 5000);
 
@@ -511,8 +711,8 @@ class PayoutController extends Controller
                 'affiliate_name' => Sanitizer::forCsv($user ? $user->full_name : ''),
                 'email'          => Sanitizer::forCsv($user ? $user->user_email : ''),
                 'payout_email'   => Sanitizer::forCsv($affiliate ? $affiliate->payment_email : ''),
-                'amount'         => $transaction->total_amount,
-                'currency'       => $transaction->currency,
+                'amount'         => Sanitizer::amountForCsv($transaction->total_amount),
+                'currency'       => Sanitizer::forCsv($transaction->currency),
             ];
         });
 
@@ -520,6 +720,66 @@ class PayoutController extends Controller
             'transactions' => $transactions,
             'limited'      => $limited,
             'total'        => $total,
+        ];
+    }
+
+    /**
+     * The processing transactions in PayPal's Payouts Web upload format:
+     * email, amount and currency, one row per transaction and no header.
+     */
+    protected function getPayPalPayoutsFile($payout)
+    {
+        // the gateway already sends this money, so a file would pay it a second time
+        if (Arr::get((array) $payout->settings, 'gateway')) {
+            return $this->sendError([
+                'message' => __('This payout is sent through a payment gateway. You cannot export it as a PayPal Payouts file.', 'fluent-affiliate')
+            ]);
+        }
+
+        // PayPal accepts at most 5,000 rows in one file
+        $limit = 5000;
+
+        $transactionQuery = Transaction::query()->where('payout_id', $payout->id)
+            ->where('status', 'processing')
+            ->with(['affiliate.user'])
+            ->orderBy('id', 'ASC');
+
+        $total = $transactionQuery->count();
+        $transactions = $transactionQuery->take($limit)->get();
+
+        $rows = [];
+        $skipped = [];
+
+        foreach ($transactions as $transaction) {
+            $affiliate = $transaction->affiliate;
+            $email = $affiliate ? trim((string) $affiliate->payment_email) : '';
+
+            // a leading formula character would need a CSV escape, which PayPal reads as part of the email
+            if (!is_email($email) || strpbrk($email[0], '=+-@') !== false) {
+                $user = $affiliate ? $affiliate->user : null;
+                $skipped[] = sanitize_text_field($user && $user->full_name ? $user->full_name : '#' . $transaction->affiliate_id);
+                continue;
+            }
+
+            $currency = strtoupper((string) $transaction->currency);
+            // PayPal takes whole units for these currencies
+            $decimals = in_array($currency, ['HUF', 'JPY', 'TWD'], true) ? 0 : 2;
+            // PayPal's web upload reads EUR and BRL amounts with a decimal comma
+            $decimalSeparator = in_array($currency, ['EUR', 'BRL'], true) ? ',' : '.';
+
+            $rows[] = [
+                'email'    => $email,
+                // quotes a comma amount, so it stays one CSV column
+                'amount'   => Sanitizer::forCsv(Sanitizer::amountForCsv($transaction->total_amount, $decimals, $decimalSeparator)),
+                'currency' => $currency,
+            ];
+        }
+
+        return [
+            'rows'    => $rows,
+            'skipped' => $skipped,
+            'limited' => $total > $limit,
+            'total'   => $total,
         ];
     }
 

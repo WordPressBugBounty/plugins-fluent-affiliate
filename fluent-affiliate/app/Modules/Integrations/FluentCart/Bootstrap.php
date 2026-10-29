@@ -252,7 +252,7 @@ class Bootstrap extends BaseConnector
                 ];
             }
 
-            $itemsByProduct[$productId]['subtotal'] += $item->subtotal;
+            $itemsByProduct[$productId]['subtotal'] += $item->subtotal - ($this->isTaxInclusive($order) ? $item->tax_amount : 0);
             $itemsByProduct[$productId]['tax']      += $item->tax_amount;
             $itemsByProduct[$productId]['discount'] += $item->discount_total;
             $itemsByProduct[$productId]['total']    += $item->line_total;
@@ -263,23 +263,20 @@ class Bootstrap extends BaseConnector
             $formattedItems[] = [
                 'item_id'  => $product['item_id'],
                 'title'    => $product['title'],
-                'subtotal' => $this->centsToDecimal($product['subtotal'], $order->currency),
-                'tax'      => $this->centsToDecimal($product['tax'], $order->currency),
-                'discount' => $this->centsToDecimal($product['discount'], $order->currency),
-                'total'    => $this->centsToDecimal($product['total'], $order->currency)
+                'subtotal' => $this->hundredthsToDecimal($product['subtotal']),
+                'tax'      => $this->hundredthsToDecimal($product['tax']),
+                'discount' => $this->hundredthsToDecimal($product['discount']),
+                'total'    => $this->hundredthsToDecimal($product['total'])
             ];
         }
 
-        $data = [
-            'id'       => $order->id,
-            'status'   => $order->payment_status,
-            'subtotal' => $this->centsToDecimal($order->subtotal, $order->currency),
-            'tax'      => $this->centsToDecimal($order->tax_total, $order->currency),
-            'discount' => $this->centsToDecimal($this->getOrderDiscountTotal($order), $order->currency),
-            'shipping' => $this->centsToDecimal($order->shipping_total, $order->currency),
-            'total'    => $this->centsToDecimal($order->total_amount, $order->currency),
-            'items'    => $formattedItems
-        ];
+        $data = array_merge([
+            'id'     => $order->id,
+            'status' => $order->payment_status,
+        ], $this->getOrderTotals($order), [
+            'total' => $this->hundredthsToDecimal($order->total_amount),
+            'items' => $formattedItems
+        ]);
 
         $data['referral_order_total'] = $this->calculateOrderTotal($data);
 
@@ -287,5 +284,33 @@ class Bootstrap extends BaseConnector
 
 
         return $data;
+    }
+
+    protected function getOrderTotals($order)
+    {
+        $totals = parent::getOrderTotals($order);
+
+        // inclusive prices keep the VAT inside subtotal and shipping
+        if ($this->isTaxInclusive($order)) {
+            // fee tax is counted in tax_total but fees are not part of subtotal
+            $productTax = $order->tax_total - (int) $order->getMeta('fee_tax');
+            $totals['subtotal'] = $this->hundredthsToDecimal($order->subtotal - $productTax);
+            $totals['shipping'] = $this->hundredthsToDecimal($order->shipping_total - $order->shipping_tax);
+            // the tax follows what is in the base: fee tax stays out with the fee,
+            // shipping tax (not part of tax_total) comes in with the shipping
+            $baseTax = $productTax;
+            if (Utility::getReferralSetting('exclude_shipping') == 'no') {
+                $baseTax += $order->shipping_tax;
+            }
+            $totals['tax'] = $this->hundredthsToDecimal($baseTax);
+        }
+
+        return $totals;
+    }
+
+    private function isTaxInclusive(Order $order)
+    {
+        // renewal orders are stored with a net subtotal, only checkout orders keep the VAT inside it
+        return (int) $order->tax_behavior === 2 && $order->type !== 'renewal';
     }
 }

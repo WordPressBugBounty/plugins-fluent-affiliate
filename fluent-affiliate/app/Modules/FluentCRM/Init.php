@@ -22,6 +22,16 @@ class Init
         $this->registerSmartCodes();
 
         add_filter('fluent_crm/subscriber_info_widgets', [$this, 'pushInfoWidgetToContact'], 99, 2);
+        add_filter('fluent_crm/funnel_icons', [$this, 'addFunnelCategoryIcon']);
+    }
+
+    public function addFunnelCategoryIcon($icons)
+    {
+        $key = strtolower(str_replace(' ', '', __('FluentAffiliate', 'fluent-affiliate')));
+
+        $icons[$key] = ['svg' => '<svg width="20" height="20" viewBox="0 0 1199 1199" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="1199" height="1199" rx="239.8" fill="black"/><rect x="863.48" y="325.93" width="737.846" height="184.462" rx="92.2308" transform="rotate(120 863.48 325.93)" fill="#FEFFFF"/><rect x="935.942" y="691.179" width="276.692" height="184.462" rx="92.2308" transform="rotate(120 935.942 691.179)" fill="#FEFFFF"/><rect x="560.42" y="360.04" width="276.692" height="184.462" rx="92.2308" transform="rotate(120 560.42 360.04)" fill="#FEFFFF"/></svg>'];
+
+        return $icons;
     }
 
     public function registerAutomations()
@@ -204,8 +214,12 @@ class Init
 
         if ($subscriber->funnel_subscriber_id) {
             $funnelSub = FunnelSubscriber::find($subscriber->funnel_subscriber_id);
-            if ($funnelSub) {
+            // source_ref_id is a transaction id only in funnels started by a payout
+            if ($funnelSub && $funnelSub->source_trigger_name === 'fluent_affiliate/payout/transaction/transaction_updated_to_paid') {
                 $transaction = Transaction::find($funnelSub->source_ref_id);
+                if ($transaction && $transaction->affiliate_id != $affiliate->id) {
+                    $transaction = null;
+                }
             }
         }
 
@@ -246,8 +260,12 @@ class Init
 
         if ($subscriber->funnel_subscriber_id) {
             $funnelSub = FunnelSubscriber::find($subscriber->funnel_subscriber_id);
-            if ($funnelSub) {
+            // source_ref_id is a referral id only in funnels started by a referral
+            if ($funnelSub && $funnelSub->source_trigger_name === 'fluent_affiliate/referral_marked_unpaid') {
                 $referral = Referral::find($funnelSub->source_ref_id);
+                if ($referral && $referral->affiliate_id != $affiliate->id) {
+                    $referral = null;
+                }
             }
         }
 
@@ -263,7 +281,7 @@ class Init
             return $defaultValue;
         }
 
-        $newCode = '{{transaction.' . $valueKey . '|' . $defaultValue . '}}';
+        $newCode = '{{referral.' . $valueKey . '|' . $defaultValue . '}}';
 
         return apply_filters('fluent_affiliate/parse_smart_codes', $newCode, [
             'referral' => $referral

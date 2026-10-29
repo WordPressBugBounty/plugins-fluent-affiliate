@@ -117,6 +117,12 @@ class AuthHandler
             return $this->handleUserLoginSuccess($user);
         }
 
+        if (!AuthHelper::isRegistrationEnabled()) {
+            wp_send_json([
+                'message' => __('Registration is disabled for this site', 'fluent-affiliate')
+            ], 422);
+        }
+
         $app = Utility::getApp();
         $request = $app->make('request');
         $fields = AuthHelper::getRegistrationFormFields(null, 'view', true);
@@ -136,7 +142,7 @@ class AuthHandler
         }
 
         foreach ($data as $key => $value) {
-            $callBack = $fields[$key]['sanitize_callback'] ?? null;
+            $callBack = AuthHelper::getFieldSanitizer($fields[$key] ?? null);
             if ($callBack) {
                 $data[$key] = call_user_func($callBack, $value);
             }
@@ -207,6 +213,19 @@ class AuthHandler
         $keys = array_keys($fields);
         $data = Arr::only($request->all(), $keys);
 
+        $email = Arr::get($data, 'email');
+        $data['email'] = is_string($email) ? sanitize_email($email) : '';
+
+        // Throttled before the username and email checks below, which tell the
+        // caller whether an account exists.
+        $rateLimit = AuthHelper::isAuthRateLimit($data['email']);
+
+        if (is_wp_error($rateLimit)) {
+            wp_send_json([
+                'message' => $rateLimit->get_error_message()
+            ], 422);
+        }
+
         if (isset($data['username'])) {
             $data['username'] = sanitize_user(strtolower(preg_replace('/[^A-Za-z0-9_]/', '', $data['username'])));
         }
@@ -245,8 +264,6 @@ class AuthHandler
             }
         }
 
-        $data['email'] = sanitize_email($data['email']);
-
         $validator = $app->make('validator')->make($data, $validationRules['rules'], $validationRules['messages']);
 
         if ($validator->fails()) {
@@ -266,7 +283,7 @@ class AuthHandler
 
         foreach ($data as $key => $value) {
             // let's sanitize the data
-            $callBack = $fields[$key]['sanitize_callback'] ?? null;
+            $callBack = AuthHelper::getFieldSanitizer($fields[$key] ?? null);
             if ($callBack) {
                 $data[$key] = call_user_func($callBack, $value);
             }
@@ -279,14 +296,6 @@ class AuthHandler
             $data['last_name'] = implode(' ', array_slice($nameParts, 1));
             unset($data['full_name']);
             $data = array_filter($data);
-        }
-
-        $rateLimit = AuthHelper::isAuthRateLimit(Arr::get($data, 'email', ''));
-
-        if (is_wp_error($rateLimit)) {
-            wp_send_json([
-                'message' => $rateLimit->get_error_message()
-            ], 422);
         }
 
         // Skip on the 2FA resubmit: the captcha token is single-use.

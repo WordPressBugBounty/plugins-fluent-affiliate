@@ -59,7 +59,7 @@ class MorphOne extends MorphOneOrMany implements SupportsPartialRelations
     /**
      * Add constraints for inner join subselect for one of many relationships.
      *
-     * @param  \FluentAffiliate\Framework\Database\Orm\Builder<TRelatedModel>  $query
+     * @param  \FluentAffiliate\Framework\Database\Orm\Builder  $query
      * @param  string|null  $column
      * @param  string|null  $aggregate
      * @return void

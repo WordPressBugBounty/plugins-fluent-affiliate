@@ -7,8 +7,10 @@ use FluentAffiliate\App\Modules\Auth\AuthHelper;
 class User extends Model
 {
     protected $table = 'users';
+
     protected $hidden = [
-        'user_pass'
+        'user_pass',
+        'user_activation_key'
     ];
 
     protected $appends = ['full_name', 'photo'];
@@ -21,6 +23,19 @@ class User extends Model
     protected $primaryKey = 'ID';
 
     protected $guarded = ['password'];
+
+    /**
+     * Eager load constraint for screens that only name the user. The full row
+     * carries the email, login and registration date.
+     *
+     * @return \Closure
+     */
+    public static function nameOnly()
+    {
+        return function ($query) {
+            $query->select(['ID', 'display_name']);
+        };
+    }
 
     /**
      * Accessor to get dynamic photo attribute
@@ -53,7 +68,10 @@ class User extends Model
             return $contact->photo;
         }
 
-        $hash = md5(strtolower(trim($this->attributes['user_email'])));
+        // Affiliate::identityOnly() loads the user without the email
+        $email = $this->attributes['user_email'] ?? '';
+
+        $hash = md5(strtolower(trim($email)));
 
         /**
          * Gravatar URL by Email
@@ -69,7 +87,7 @@ class User extends Model
 
         return apply_filters('fluent_crm/get_avatar',
             "https://www.gravatar.com/avatar/{$hash}?s=128" . $fallback,
-            $this->attributes['user_email']
+            $email
         );
     }
 

@@ -23,6 +23,12 @@ use FluentAffiliate\Framework\Database\Orm\Relations\Concerns\AsPivot;
 use FluentAffiliate\Framework\Database\Orm\Collection as OrmCollection;
 use FluentAffiliate\Framework\Database\ConnectionResolverInterface as Resolver;
 
+/**
+ * Model forwards unknown instance/static calls to a new Orm Builder
+ * (see __call/__callStatic), which itself proxies to the Query Builder.
+ *
+ * @mixin \FluentAffiliate\Framework\Database\Orm\Builder<static>
+ */
 abstract class Model implements ArrayableInterface, ArrayAccess, CanBeEscapedWhenCastToString, JsonableInterface, JsonSerializable, UrlRoutable
 {
     use HelperFunctionsTrait;
@@ -296,8 +302,10 @@ abstract class Model implements ArrayableInterface, ArrayAccess, CanBeEscapedWhe
      */
     protected function initializeTraits()
     {
-        foreach (static::$traitInitializers[static::class] as $method) {
-            $this->{$method}();
+        if (isset(static::$traitInitializers[static::class])) {
+            foreach (static::$traitInitializers[static::class] as $method) {
+                $this->{$method}();
+            }
         }
     }
 
@@ -1129,8 +1137,10 @@ abstract class Model implements ArrayableInterface, ArrayAccess, CanBeEscapedWhe
     /**
      * Set the keys for a select query.
      *
-     * @param  \FluentAffiliate\Framework\Database\Orm\Builder  $query
-     * @return \FluentAffiliate\Framework\Database\Orm\Builder
+     * @template TBuilder of \FluentAffiliate\Framework\Database\Orm\Builder<*>
+     *
+     * @param  TBuilder  $query
+     * @return TBuilder
      */
     protected function setKeysForSelectQuery($query)
     {
@@ -1361,7 +1371,7 @@ abstract class Model implements ArrayableInterface, ArrayAccess, CanBeEscapedWhe
     /**
      * Begin querying the model.
      *
-     * @return \FluentAffiliate\Framework\Database\Orm\Builder
+     * @return \FluentAffiliate\Framework\Database\Orm\Builder<static>
      */
     public static function query()
     {
@@ -1371,7 +1381,7 @@ abstract class Model implements ArrayableInterface, ArrayAccess, CanBeEscapedWhe
     /**
      * Get a new query builder for the model's table.
      *
-     * @return \FluentAffiliate\Framework\Database\Orm\Builder
+     * @return \FluentAffiliate\Framework\Database\Orm\Builder<static>
      */
     public function newQuery()
     {
@@ -1381,7 +1391,7 @@ abstract class Model implements ArrayableInterface, ArrayAccess, CanBeEscapedWhe
     /**
      * Get a new query builder that doesn't have any global scopes or eager loading.
      *
-     * @return \FluentAffiliate\Framework\Database\Orm\Builder|static
+     * @return \FluentAffiliate\Framework\Database\Orm\Builder<static>
      */
     public function newModelQuery()
     {
@@ -1418,7 +1428,7 @@ abstract class Model implements ArrayableInterface, ArrayAccess, CanBeEscapedWhe
     /**
      * Get a new query builder that doesn't have any global scopes.
      *
-     * @return \FluentAffiliate\Framework\Database\Orm\Builder|static
+     * @return \FluentAffiliate\Framework\Database\Orm\Builder<static>
      */
     public function newQueryWithoutScopes()
     {

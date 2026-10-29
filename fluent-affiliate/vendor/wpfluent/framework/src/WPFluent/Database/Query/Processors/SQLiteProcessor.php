@@ -22,6 +22,11 @@ class SQLiteProcessor extends Processor
 
             $safeName = preg_quote($result->name, '/');
 
+            // Read this column's collation from the CREATE TABLE sql: after the
+            // column name, skip its type, a size like (10,2) and any DEFAULT,
+            // CHECK or AS part, then take the word after COLLATE. '"price"
+            // numeric(10,2) default (0) collate binary' gives 'binary'; a
+            // column without COLLATE gives null.
             $collation = preg_match(
                 '/\b' . $safeName . '\b[^,(]+(?:\([^()]+\)[^,]*)?(?:(?:default|check|as)\s*(?:\(.*?\))?[^,]*)*collate\s+["\'`]?(\w+)/i',
                 $sql,
@@ -30,8 +35,14 @@ class SQLiteProcessor extends Processor
 
             $isGenerated = in_array($result->extra, [2, 3]);
 
+            // For a generated column, read the expression inside AS (...):
+            // '"total" integer as (price * qty) stored' gives 'price * qty'.
+            // Between the name and AS, a size like (10,2) is skipped whole,
+            // so 'decimal(10,2) as (...)' works too. Brackets inside the
+            // expression work up to two levels deep, as in
+            // 'as (lower(replace(title, ' ', '-')))'.
             $expression = $isGenerated && preg_match(
-                '/\b' . $safeName . '\b[^,]+\s+as\s+\(((?:[^()]+|\((?:[^()]+|\([^()]*\))*\))*)\)/i',
+                '/\b' . $safeName . '\b(?:[^,()]|\([^()]*\))+?\s+as\s+\(((?:[^()]+|\((?:[^()]+|\([^()]*\))*\))*)\)/i',
                 $sql,
                 $matches
             ) === 1 ? $matches[1] : null;

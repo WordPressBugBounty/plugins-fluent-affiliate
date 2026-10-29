@@ -1360,7 +1360,11 @@ class Arr
      */
     public static function like($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // A regex such as '/^ab/' or '/^s/i' is used as it is (see
+        // isLikeRegex()). Anything else is plain text, turned into a
+        // case-insensitive "contains" regex: 'app' -> '~app~i', which keeps
+        // 'Apple' and 'Snapple'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~'. preg_quote($pattern, '~') . '~i';
         }
 
@@ -1376,7 +1380,9 @@ class Arr
      */
     public static function notLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same check as like(); PREG_GREP_INVERT then keeps the items that
+        // do NOT match: 'app' keeps 'Pear' only.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~'. preg_quote($pattern, '~') . '~i';
         }
 
@@ -1392,7 +1398,9 @@ class Arr
      */
     public static function startsLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same check as like(); plain text must be at the start (^):
+        // 'app' -> '~^app~i', which keeps 'Apple' but not 'Snapple'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~^'. preg_quote($pattern, '~') . '~i';
         }
 
@@ -1408,7 +1416,10 @@ class Arr
      */
     public static function DoesNotStartLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same check as like(); (?!...) checks what comes next without
+        // taking it, so '~^(?!app)~i' keeps the items that do NOT start
+        // with 'app': 'Snapple' and 'Pear'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern = '~^(?!' . preg_quote($pattern, '~') . ')~i';
         }
 
@@ -1424,7 +1435,9 @@ class Arr
      */
     public static function endsLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same check as like(); plain text must be at the end ($):
+        // 'le' -> '~le$~i', which keeps 'Apple' and 'Snapple'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~'. preg_quote($pattern, '~') . '$~i';
         }
 
@@ -1440,7 +1453,9 @@ class Arr
      */
     public static function DoesNotEndLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same check as like(); '~le$~i' with PREG_GREP_INVERT keeps the
+        // items that do NOT end with 'le': 'Pear' only.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~'. preg_quote($pattern, '~') . '$~i';
         }
 
@@ -1456,7 +1471,9 @@ class Arr
      */
     public static function keysLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same as like(), on the keys: 'user' keeps 'user_name' and
+        // 'user_id'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~'. preg_quote($pattern, '~') . '~i';
         }
 
@@ -1480,7 +1497,9 @@ class Arr
      */
     public static function keysNotLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same as notLike(), on the keys (the 1 passed to preg_grep() is
+        // PREG_GREP_INVERT): 'user' keeps 'post_id' only.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~'. preg_quote($pattern, '~') . '~i';
         }
 
@@ -1504,7 +1523,9 @@ class Arr
      */
     public static function keysStartLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same as startsLike(), on the keys: 'user' keeps 'user_name' and
+        // 'user_id'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~^'. preg_quote($pattern, '~') . '~i';
         }
 
@@ -1528,7 +1549,8 @@ class Arr
      */
     public static function keysDoesNotStartLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same as DoesNotStartLike(), on the keys: 'user' keeps 'post_id'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern = '~^(?!' . preg_quote($pattern, '~') . ')~i';
         }
 
@@ -1552,7 +1574,9 @@ class Arr
      */
     public static function keysEndLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same as endsLike(), on the keys: '_id' keeps 'user_id' and
+        // 'post_id'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~'. preg_quote($pattern, '~') . '$~i';
         }
 
@@ -1576,7 +1600,8 @@ class Arr
      */
     public static function keysDoesNotEndLike($array, $pattern)
     {
-        if (!preg_match('/^([\/#~]).*\1$/', $pattern)) {
+        // Same as DoesNotEndLike(), on the keys: '_id' keeps 'user_name'.
+        if (!static::isLikeRegex($pattern)) {
             $pattern =  '~'. preg_quote($pattern, '~') . '$~i';
         }
 
@@ -1589,6 +1614,23 @@ class Arr
         }
         
         return $values;
+    }
+
+    /**
+     * Determine if a like() pattern is already a regex, rather than plain
+     * text to search for.
+     *
+     * @param  string  $pattern
+     * @return bool
+     */
+    protected static function isLikeRegex($pattern)
+    {
+        // The same /, # or ~ at both ends (\1 repeats the first one), then
+        // any flags: '/^ab/', '#x#' and '/^s/i' qualify. It must also be a
+        // valid regex, so text like '/usr/sbin' ('sbin' are not all flags
+        // PHP knows) is searched as plain text.
+        return preg_match('/^([\/#~]).*\1[a-zA-Z]*\z/s', $pattern) === 1
+            && @preg_match($pattern, '') !== false;
     }
 
     /**

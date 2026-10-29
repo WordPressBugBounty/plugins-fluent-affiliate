@@ -11,6 +11,7 @@ use FluentAffiliate\App\Models\Referral;
 use FluentAffiliate\App\Models\Transaction;
 use FluentAffiliate\App\Models\User;
 use FluentAffiliate\App\Models\Visit;
+use FluentAffiliate\App\Services\Migrator\BaseMigrator;
 use FluentAffiliate\Database\DBSeeder;
 use FluentAffiliate\Database\Seeder\AffiliateSeeder;
 use FluentAffiliate\Framework\Support\Arr;
@@ -27,33 +28,15 @@ class Commands
             \WP_CLI::error("AffiliateWP is not installed or activated. Please install and activate AffiliateWP before running this command.");
         }
 
-        $db = FluentAffiliate('db');
+        $migrator = new \FluentAffiliate\App\Services\Migrator\Providers\AffiliateWP();
 
-        $stats = [
-            [
-                'title' => 'Total Affiliates',
-                'count' => $db->table('affiliate_wp_affiliates')->count()
-            ],
-            [
-                'title' => 'Total Referrals',
-                'count' => $db->table('affiliate_wp_referrals')->count()
-            ],
-            [
-                'title' => 'Total Payouts',
-                'count' => $db->table('affiliate_wp_payouts')->count()
-            ],
-            [
-                'title' => 'Total Visits',
-                'count' => $db->table('affiliate_wp_visits')->count()
-            ],
-            [
-                'title' => 'Total Affiliated Customers',
-                'count' => $db->table('affiliate_wp_customers')->count()
-            ]
-        ];
-
-        // show as cli table
-        \WP_CLI\Utils\format_items('table', $stats, ['title', 'count']);
+        $this->printSourceCounts($migrator->getCounts(), [
+            'affiliates' => 'Total Affiliates',
+            'referrals'  => 'Total Referrals',
+            'payouts'    => 'Total Payouts',
+            'visits'     => 'Total Visits',
+            'customers'  => 'Total Affiliated Customers',
+        ]);
 
         // Ask if user wants to continue with WP CLI
         \WP_CLI::confirm("Are you sure you want to migrate?");
@@ -61,50 +44,18 @@ class Commands
         // Show start migrating message
         \WP_CLI::log("Starting migration...");
 
-        // Migrate affiliates
-        if (\FluentAffiliate\App\Models\Affiliate::count()) {
-            fluentAffiliate_update_option('affwp_migrated_affiliates', 0);
-            FluentAffiliate('db')->table('fa_affiliates')->truncate();
-        }
+        // This command has always replaced rather than merged.
+        Affiliate::truncate();
+        BaseMigrator::clearAffiliateIdMaps();
+        Referral::truncate();
+        Customer::truncate();
+        Payout::truncate();
+        Transaction::truncate();
+        Visit::truncate();
 
-        $this->migrateAffiliateWpAffiliates();
+        $this->runMigratorStages($migrator);
 
-        // Migrate referrals
-        if (\FluentAffiliate\App\Models\Referral::count()) {
-            fluentAffiliate_update_option('affwp_migrated_referrals', 0);
-            FluentAffiliate('db')->table('fa_referrals')->truncate();
-        }
-
-        $this->migrateAffiliateWpReferrals();
-
-        // Let's Migrate Customers
-        if (\FluentAffiliate\App\Models\Customer::count()) {
-            fluentAffiliate_update_option('affwp_migrated_customers', 0);
-            FluentAffiliate('db')->table('fa_customers')->truncate();
-        }
-        $this->migrateAffiliateWpCustomers();
-
-        // Let's Migrate Payouts
-        if (\FluentAffiliate\App\Models\Payout::count()) {
-            fluentAffiliate_update_option('affwp_migrated_payout_id', 0);
-            FluentAffiliate('db')->table('fa_payouts')->truncate();
-            FluentAffiliate('db')->table('fa_payout_transactions')->truncate();
-        }
-
-        $this->migrateAffiliateWpPayouts();
-
-        // Let's Migrate Visits
-        if (\FluentAffiliate\App\Models\Visit::count()) {
-            fluentAffiliate_update_option('affwp_migrated_visits', 0);
-            FluentAffiliate('db')->table('fa_visits')->truncate();
-        }
-
-        $this->migrateAffiliateWpVisits();
-
-        // Reset the shared keyset cursor so the recount starts from the first
-        // affiliate id, matching migrate_from_slicewp and the web provider.
-        fluentAffiliate_update_option('affwp_migrated_recount', 0);
-        $this->recount_earnings();
+        \WP_CLI::success('AffiliateWP migration completed.');
     }
 
     public function recount_earnings()
@@ -121,6 +72,9 @@ class Commands
         ;
 
         if ($affiliates->isEmpty()) {
+            // reset, so the next run recounts every affiliate again instead of
+            // finishing at once from the end of this one
+            fluentAffiliate_update_option('affwp_migrated_recount', 0);
             \WP_CLI::log("Affiliate recount done");
             return $lastId;
         }
@@ -137,327 +91,26 @@ class Commands
 
     }
 
-    private function migrateAffiliateWpAffiliates()
-    {
-        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_affiliates', 0);
-
-        $affiliates = FluentAffiliate('db')->table('affiliate_wp_affiliates')
-            ->where('affiliate_id', '>', $lastId)
-            ->orderBy('affiliate_id', 'ASC')
-            ->limit(100)
-            ->get();
-
-        if ($affiliates->isEmpty()) {
-            \WP_CLI::log("Affiliate migration done");
-            return $lastId;
-        }
-
-        foreach ($affiliates as $affiliate) {
-
-            $rateType = ($affiliate->rate_type) ? $affiliate->rate_type : 'default';
-
-            $data = [
-                'id'              => $affiliate->affiliate_id,
-                'user_id'         => $affiliate->user_id,
-                'rate'            => $rateType === 'default' ? NULL : $affiliate->rate,
-                'rate_type'       => $rateType,
-                'payment_email'   => $affiliate->payment_email,
-                'status'          => $affiliate->status,
-                'total_earnings'  => $affiliate->earnings,
-                'unpaid_earnings' => $affiliate->unpaid_earnings,
-                'referrals'       => $affiliate->referrals,
-                'visits'          => $affiliate->visits,
-                'created_at'      => $affiliate->date_registered,
-                'updated_at'      => $affiliate->date_registered,
-            ];
-
-            FluentAffiliate('db')->table('fa_affiliates')->insert($data);
-            $lastId = $affiliate->affiliate_id;
-            fluentAffiliate_update_option('affwp_migrated_affiliates', $lastId);
-        }
-
-        \WP_CLI::log(sprintf("Migrated affiliates up to #%d.....", $lastId));
-
-        $this->migrateAffiliateWpAffiliates();
-    }
-
-    private function migrateAffiliateWpReferrals()
-    {
-        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_referrals', 0);
-
-        $referrals = FluentAffiliate('db')->table('affiliate_wp_referrals')
-            ->where('referral_id', '>', $lastId)
-            ->orderBy('referral_id', 'ASC')
-            ->limit(100)
-            ->get();
-
-        if ($referrals->isEmpty()) {
-            \WP_CLI::log("Referral migration done");
-            return $lastId;
-        }
-
-        foreach ($referrals as $referral) {
-
-            $oderTotal = 0;
-
-            if ($mata = FluentAffiliate('db')->table('affiliate_wp_sales')->where('referral_id', $referral->referral_id)->first()) {
-                $oderTotal = $mata->order_total;
-            }
-
-            $providerId = $referral->reference;
-            $provider_sub_id = '';
-            if (is_numeric($providerId)) {
-                $providerId = (int)$providerId;
-            } else {
-                $provider_sub_id = $providerId;
-                $providerId = NULL;
-            }
-
-            $formattedProducts = [];
-            $products = Utility::safeUnserialize($referral->products);
-
-            if ($products && is_array($products)) {
-                foreach ($products as $product) {
-                    $price = isset($product['price']) ? (float)$product['price'] : 0.00;
-                    $formattedProducts[] = array_filter([
-                        'item_id'  => (int)Arr::get($product, 'id'),
-                        'title'    => Arr::get($product, 'name', $referral->description),
-                        'subtotal' => isset($product['price']) ? (float)$product['price'] : 0.00,
-                        'price'    => $price,
-                        'total'    => $price
-                    ]);
-                }
-            } else {
-                $formattedProducts[] = [
-                    'item_id'  => NULL,
-                    'title'    => $referral->description,
-                    'subtotal' => $oderTotal,
-                    'price'    => $oderTotal,
-                    'total'    => $oderTotal
-                ];
-            }
-
-
-            $data = array_filter([
-                'id'              => $referral->referral_id,
-                'affiliate_id'    => $referral->affiliate_id,
-                'visit_id'        => $referral->visit_id,
-                'description'     => $referral->description,
-                'status'          => $referral->status,
-                'amount'          => $referral->amount,
-                'order_total'     => $oderTotal,
-                'currency'        => $referral->currency,
-                'provider'        => $referral->context,
-                'provider_id'     => $providerId,
-                'provider_sub_id' => $provider_sub_id,
-                'products'        => maybe_serialize($formattedProducts),
-                'payout_id'       => $referral->payout_id,
-                'customer_id'     => $referral->customer_id,
-                'created_at'      => $referral->date,
-                'updated_at'      => $referral->date,
-            ]);
-
-            FluentAffiliate('db')->table('fa_referrals')->insert($data);
-            $lastId = $referral->referral_id;
-            fluentAffiliate_update_option('affwp_migrated_referrals', $lastId);
-        }
-
-        \WP_CLI::log(sprintf("Migrated referrals up to #%d.....", $lastId));
-
-        $this->migrateAffiliateWpReferrals();
-
-    }
-
-    private function migrateAffiliateWpCustomers()
-    {
-        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_customers', 0);
-
-        $customers = FluentAffiliate('db')->table('affiliate_wp_customers')
-            ->where('customer_id', '>', $lastId)
-            ->orderBy('customer_id', 'ASC')
-            ->limit(100)
-            ->get();
-
-        if ($customers->isEmpty()) {
-            \WP_CLI::log("Customer migration done");
-            return $lastId;
-        }
-
-        foreach ($customers as $customer) {
-            $data = array_filter([
-                'id'         => $customer->customer_id,
-                'user_id'    => $customer->user_id,
-                'email'      => $customer->email,
-                'first_name' => $customer->first_name,
-                'last_name'  => $customer->last_name,
-                'created_at' => $customer->date_created,
-                'updated_at' => $customer->date_created,
-            ]);
-
-            $firstRef = FluentAffiliate('db')->table('affiliate_wp_customermeta')
-                ->where('affwp_customer_id', $customer->customer_id)
-                ->where('meta_key', 'affiliate_id')
-                ->orderBy('meta_id', 'ASC')
-                ->first();
-
-            if ($firstRef && is_numeric($firstRef->meta_value)) {
-                $data['by_affiliate_id'] = $firstRef->meta_value;
-            }
-
-            FluentAffiliate('db')->table('fa_customers')->insert($data);
-            $lastId = $customer->customer_id;
-            fluentAffiliate_update_option('affwp_migrated_customers', $lastId);
-        }
-
-        \WP_CLI::log(sprintf("Migrated customers up to #%d.....", $lastId));
-
-        $this->migrateAffiliateWpCustomers();
-    }
-
-    private function migrateAffiliateWpPayouts()
-    {
-        $migratedCount = fluentAffiliate_get_option('affwp_migrated_payout_id', 0);
-
-        $affWPSettings = get_option('affwp_settings');
-
-        $currency = isset($affWPSettings['currency']) ? $affWPSettings['currency'] : 'USD';
-
-        $payoutGroups = FluentAffiliate('db')->table('affiliate_wp_payouts')
-            ->select([
-                FluentAffiliate('db')->raw('DATE(date) as date_group'),
-                'owner',
-                'payout_method'
-            ])
-            ->orderBy('date', 'ASC')
-            ->groupBy('date_group')
-            ->where('payout_id', '>', $migratedCount)
-            ->limit(5)
-            ->get();
-
-        if ($payoutGroups->isEmpty()) {
-            $total = FluentAffiliate('db')->table('affiliate_wp_payouts')->count();
-            \WP_CLI::log(sprintf("Total %d payouts migration done", $total));
-            return $total;
-        }
-
-        foreach ($payoutGroups as $payoutGroup) {
-            $payouts = FluentAffiliate('db')->table('affiliate_wp_payouts')
-                ->where('date', 'LIKE', $payoutGroup->date_group . '%')
-                ->get();
-
-            $transactions = [];
-            $totalPayoutAmount = 0;
-
-            $formattedPayout = [
-                'created_by'    => $payoutGroup->owner,
-                'total_amount'  => 0,
-                'payout_method' => $payoutGroup->payout_method,
-                'status'        => 'paid',
-                'currency'      => $currency,
-                'title'         => sprintf('Payouts at %s', $payoutGroup->date_group),
-                'description'   => sprintf('Migrated Payouts at %s from AffiliateWP', $payoutGroup->date_group),
-                'created_at'    => $payoutGroup->date_group . ' 00:00:00',
-                'updated_at'    => $payoutGroup->date_group . ' 00:00:00'
-            ];
-
-            foreach ($payouts as $payout) {
-                $transactions[] = array_filter([
-                    'created_by'    => $payout->owner,
-                    'affiliate_id'  => $payout->affiliate_id,
-                    'total_amount'  => $payout->amount,
-                    'currency'      => $currency,
-                    'payout_method' => $payout->payout_method,
-                    'status'        => $payout->status,
-                    'created_at'    => $payout->date,
-                    'updated_at'    => $payout->date,
-                    'aff_wp_id'     => $payout->payout_id,
-                    'referrals_ids' => explode(',', $payout->referrals),
-                ]);
-                $totalPayoutAmount += $payout->amount;
-            }
-
-            $formattedPayout['total_amount'] = $totalPayoutAmount;
-
-            $payoutId = FluentAffiliate('db')
-                ->table('fa_payouts')
-                ->insertGetId($formattedPayout);
-
-            foreach ($transactions as $transaction) {
-                $affWpId = $transaction['aff_wp_id'];
-                $referralIds = $transaction['referrals_ids'];
-                $transaction['payout_id'] = $payoutId;
-                unset($transaction['aff_wp_id']);
-                unset($transaction['referrals_ids']);
-                $payoutTransactionId = FluentAffiliate('db')->table('fa_payout_transactions')->insertGetId($transaction);
-
-                FluentAffiliate('db')->table('fa_referrals')
-                    ->whereIn('id', $referralIds)
-                    ->update([
-                        'payout_id'             => $payoutId,
-                        'payout_transaction_id' => $payoutTransactionId
-                    ]);
-
-                fluentAffiliate_update_option('affwp_migrated_payout_id', $affWpId);
-            }
-        }
-
-        $migratedCount = Payout::count();
-
-        \WP_CLI::log(sprintf("Migrated %d payouts.....", $migratedCount));
-
-        $this->migrateAffiliateWpPayouts();
-    }
-
-    private function migrateAffiliateWpVisits()
-    {
-        $lastId = (int) fluentAffiliate_get_option('affwp_migrated_visits', 0);
-
-        $visits = FluentAffiliate('db')->table('affiliate_wp_visits')
-            ->where('visit_id', '>', $lastId)
-            ->orderBy('visit_id', 'ASC')
-            ->limit(1000)
-            ->get();
-
-        if ($visits->isEmpty()) {
-            \WP_CLI::log("Visit migration done");
-            return $lastId;
-        }
-
-        foreach ($visits as $visit) {
-
-            $data = array_filter([
-                'id'           => $visit->visit_id,
-                'affiliate_id' => $visit->affiliate_id,
-                'referral_id'  => $visit->referral_id,
-                'url'          => $visit->url,
-                'referrer'     => $visit->referrer,
-                'utm_campaign' => $visit->campaign,
-                'ip'           => $visit->ip,
-                'created_at'   => $visit->date,
-                'updated_at'   => $visit->date,
-            ]);
-
-            FluentAffiliate('db')->table('fa_visits')->insert($data);
-            $lastId = $visit->visit_id;
-            fluentAffiliate_update_option('affwp_migrated_visits', $lastId);
-        }
-
-        \WP_CLI::log(sprintf("Migrated visits up to #%d.....", $lastId));
-
-        $this->migrateAffiliateWpVisits();
-    }
-
     /**
      * Returns Seed FluentAffiliate fake data to view.
      * @return void
      */
     public function seed()
     {
+        if (!defined('FLUENT_AFFILIATE_DEV_MODE')) {
+            \WP_CLI::error("FLUENT_AFFILIATE_DEV_MODE is not active.");
+        }
+
         DBSeeder::run();
     }
 
     public function freshSeed()
     {
+        // truncates the affiliate data, so never on a site that is not in dev mode
+        if (!defined('FLUENT_AFFILIATE_DEV_MODE')) {
+            \WP_CLI::error("FLUENT_AFFILIATE_DEV_MODE is not active.");
+        }
+
         (new AffiliateSeeder())->freshSeed();
     }
 
@@ -731,12 +384,85 @@ class Commands
         // preserves Solid's ids, so rows left behind would collide with them.
         AffiliateGroup::truncate();
         Affiliate::truncate();
+        BaseMigrator::clearAffiliateIdMaps();
         Referral::truncate();
         Customer::truncate();
         Payout::truncate();
         Transaction::truncate();
         Visit::truncate();
 
+        $this->runMigratorStages($migrator);
+
+        \WP_CLI::success('Solid Affiliate migration completed.');
+    }
+
+
+    /**
+     * Migrate from Affiliate Manager to FluentAffiliate
+     *
+     * Drives the shared AffiliateManagerMigrator provider, the same code path
+     * the admin migration screen runs, so the two cannot drift apart.
+     *
+     * ## EXAMPLES
+     *
+     *     wp fluent_affiliate migrate_from_affiliate_manager
+     *
+     * @when after_wp_load
+     */
+    public function migrate_from_affiliate_manager()
+    {
+        // the run truncates the FluentAffiliate tables first, so there must be a source to refill them
+        if (!defined('WPAM_PLUGIN_FILE')) {
+            \WP_CLI::error('Affiliate Manager is not active. Nothing to migrate.');
+        }
+
+        $migrator = new \FluentAffiliate\App\Services\Migrator\Providers\AffiliateManagerMigrator();
+
+        $this->printSourceCounts($migrator->getCounts(), [
+            'affiliates' => 'Total Affiliates',
+            'referrals'  => 'Total Referrals',
+            'customers'  => 'Total Customers',
+            'payouts'    => 'Total Payouts',
+            'visits'     => 'Total Visits',
+            'creatives'  => 'Total Creatives',
+        ]);
+
+        \WP_CLI::confirm('Are you sure you want to migrate from Affiliate Manager to Fluent Affiliate? This will truncate existing FluentAffiliate data.');
+
+        \WP_CLI::log('Starting Affiliate Manager migration...');
+
+        Affiliate::truncate();
+        BaseMigrator::clearAffiliateIdMaps();
+        Referral::truncate();
+        Customer::truncate();
+        Payout::truncate();
+        Transaction::truncate();
+        Visit::truncate();
+
+        $this->runMigratorStages($migrator);
+
+        \WP_CLI::success('Affiliate Manager migration completed.');
+    }
+
+    private function printSourceCounts($counts, $labels)
+    {
+        $stats = [];
+        foreach ($labels as $countKey => $title) {
+            $stats[] = [
+                'title' => $title,
+                'count' => (int) Arr::get($counts, $countKey, 0),
+            ];
+        }
+
+        \WP_CLI\Utils\format_items('table', $stats, ['title', 'count']);
+    }
+
+    /**
+     * Run a migrator provider from its first stage to completion, the way the
+     * admin migration screen does over repeated requests.
+     */
+    private function runMigratorStages($migrator)
+    {
         // Start a fresh run: clears every stage cursor and the recount cursor.
         $migrator->updateCurrentStatus([], false);
 
@@ -786,28 +512,6 @@ class Commands
                 return;
             }
         }
-
-        \WP_CLI::success('Solid Affiliate migration completed.');
-    }
-
-
-    /**
-     * Migrate from Affiliate Manager to FluentAffiliate
-     *
-     * This command uses the temporary CLI migration class to handle the complete
-     * migration process with all critical fixes applied.
-     *
-     * ## EXAMPLES
-     *
-     *     wp fluent_affiliate migrate_from_affiliate_manager
-     *
-     * @when after_wp_load
-     */
-    public function migrate_from_affiliate_manager()
-    {
-        // Use the new temporary CLI migration class
-        $migrator = new \FluentAffiliate\App\Services\Migrator\CLI\AffiliateManagerMigrationCLI();
-        $migrator->migrate();
     }
 
     public function migrate_from_ultimate_affiliate()
@@ -818,63 +522,18 @@ class Commands
         }
 
         // Drive the shared, already-verified UltimateAffiliate provider rather
-        // than reimplementing each stage. The provider deduplicates by source
-        // id, so re-running is idempotent without truncating fa_* tables.
+        // than reimplementing each stage.
         $migrator = new \FluentAffiliate\App\Services\Migrator\Providers\UltimateAffiliate();
 
-        // Start a fresh run: clear the staged cursors and the recount cursor,
-        // then begin at the first stage.
-        $migrator->updateCurrentStatus([], false);
-        fluentAffiliate_update_option('ultimate_affiliate_migrated_recount', 0);
-
-        $status = $migrator->getCurrentStatus();
-        $status['current_stage'] = 'affiliate_groups';
-        $migrator->updateCurrentStatus($status, false);
-
-        $stageMethods = [
-            'affiliate_groups' => 'migrateAffiliateGroups',
-            'affiliates'       => 'migrateAffiliates',
-            'referrals'        => 'migrateReferrals',
-            'customers'        => 'migrateCustomers',
-            'payouts'          => 'migratePayouts',
-            'visits'           => 'migrateVisits',
-            'creatives'        => 'migrateCreatives',
-        ];
+        // unlike the other commands this one does not truncate, and the provider
+        // skips any source id that is already taken, so it needs an empty site
+        if (array_sum((new \FluentAffiliate\App\Http\Controllers\MigrationController())->getCurrentDataCounts())) {
+            \WP_CLI::error('FluentAffiliate already has data. Wipe the existing data first, then start the migration.');
+        }
 
         \WP_CLI::log('Starting Ultimate Affiliate migration...');
 
-        $guard = 0;
-        while (true) {
-            // Fresh time budget each dispatch; a stage that exceeds it returns
-            // without advancing and is resumed from its keyset cursor on the
-            // next iteration, so progress is monotonic.
-            $migrator->setTimeLimit(Utility::getMaxRunTime());
-
-            $status = $migrator->getCurrentStatus();
-            $stage = Arr::get($status, 'current_stage', 'affiliate_groups');
-
-            if ($stage === 'completed') {
-                break;
-            }
-
-            if (!isset($stageMethods[$stage])) {
-                \WP_CLI::error(sprintf('Unknown migration stage "%s". Aborting.', $stage));
-                return;
-            }
-
-            $method = $stageMethods[$stage];
-            $migrator->{$method}($status);
-
-            if (Arr::get($migrator->getCurrentStatus(), 'current_stage', $stage) !== $stage) {
-                \WP_CLI::log(sprintf('Stage "%s" done.', $stage));
-            }
-
-            // Backstop against an unexpected non-advancing stage.
-            if (++$guard > 100000) {
-                \WP_CLI::error('Migration exceeded the maximum number of batches; aborting to avoid a loop.');
-                return;
-            }
-        }
+        $this->runMigratorStages($migrator);
 
         \WP_CLI::success('Ultimate Affiliate migration completed.');
     }
@@ -930,6 +589,7 @@ class Commands
         if (Affiliate::count()) {
             fluentAffiliate_update_option('slicewp_migrated_affiliates', 0);
             FluentAffiliate('db')->table('fa_affiliates')->truncate();
+            BaseMigrator::clearAffiliateIdMaps();
         }
         $this->migrateSliceWPAffiliates();
 
@@ -1273,7 +933,6 @@ class Commands
             'paid'       => 'paid',
             'unpaid'     => 'processing',
             'processing' => 'processing',
-            'failed'     => 'processing',
         ];
 
         $payouts = $db->table('slicewp_payouts')
@@ -1289,8 +948,10 @@ class Commands
 
         $payoutIds = $payouts->pluck('id')->toArray();
 
+        // a failed payment never sent the money, so its commissions stay owed
         $allPayments = $db->table('slicewp_payments')
             ->whereIn('payout_id', $payoutIds)
+            ->where('status', '!=', 'failed')
             ->get();
 
         $paymentsByPayout = [];
@@ -1309,11 +970,18 @@ class Commands
 
             $firstPayment = $payments[0];
 
+            $totalAmount = 0;
+            $hasOpenPayment = false;
+            foreach ($payments as $payment) {
+                $totalAmount += (float) $payment->amount;
+                $hasOpenPayment = $hasOpenPayment || ($paymentStatusMap[$payment->status] ?? 'paid') !== 'paid';
+            }
+
             $formattedPayout = [
                 'created_by'    => $payout->originator_user_id ?: null,
-                'total_amount'  => $payout->amount,
+                'total_amount'  => $totalAmount,
                 'payout_method' => isset($payoutMethodMap[$firstPayment->payout_method]) ? $payoutMethodMap[$firstPayment->payout_method] : 'manual',
-                'status'        => 'paid',
+                'status'        => $hasOpenPayment ? 'processing' : 'paid',
                 'currency'      => $firstPayment->currency ?: null,
                 'title'         => 'Payout batch at ' . $payout->date_created,
                 'description'   => 'Migrated from SliceWP',

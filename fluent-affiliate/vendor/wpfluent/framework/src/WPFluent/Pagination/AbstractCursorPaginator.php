@@ -471,6 +471,8 @@ abstract class AbstractCursorPaginator
      */
     public function setPath($path)
     {
+        // A path that doesn't start with http:// or https:// (any case) is
+        // relative: prefix it with the current request's URL.
         if (!preg_match('/^https?:\/\//i', $path)) {
             $path = App::make('request')->url() . '/' . trim($path, '/');
         }

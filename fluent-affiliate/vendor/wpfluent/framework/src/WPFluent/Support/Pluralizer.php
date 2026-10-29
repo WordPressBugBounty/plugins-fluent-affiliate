@@ -7,11 +7,17 @@ class Pluralizer
     /**
      * Plural word form rules.
      *
+     * Irregular words are checked first. Then the first pattern that
+     * matches the end of the word wins, and its replacement swaps the
+     * ending ($1 is the text the first brackets matched, /i ignores
+     * case): '/([^aeiouy]|qu)y$/i' => '$1ies' turns 'city' into
+     * 'cities'; [^aeiouy] is any character but a, e, i, o, u or y.
+     *
      * @var array<string,string>
      */
     public static array $plural = [
         '/(quiz)$/i' => '$1zes',
-        '/^(ox)$/i' => '$1en',
+        '/(?<![a-z])(ox)$/i' => '$1en',
         '/([ml])ouse$/i' => '$1ice',
         '/(matr|vert|ind)(?:ix|ex)$/i' => '$1ices',
         '/(stoma|epo|monar|matriar|patriar|oligar|eunu)ch$/i' => '$1chs',
@@ -35,13 +41,16 @@ class Pluralizer
     /**
      * Singular word form rules.
      *
+     * Used the same way as $plural: '/([^aeiouy]|qu)ies$/i' => '$1y'
+     * turns 'cities' into 'city'.
+     *
      * @var array<string,string>
      */
     public static array $singular = [
         '/(quiz)zes$/i' => '$1',
         '/(matr)ices$/i' => '$1ix',
         '/(vert|vort|ind)ices$/i' => '$1ex',
-        '/^(ox)en$/i' => '$1',
+        '/(?<![a-z])(ox)en$/i' => '$1',
         '/(alias)es$/i' => '$1',
         '/(octop|vir|fung)i$/i' => '$1us',
         '/(cris|ax|test)es$/i' => '$1is',
@@ -81,16 +90,24 @@ class Pluralizer
         'criterion' => 'criteria',
         'foot' => 'feet',
         'freshman' => 'freshmen',
+        'mongoose' => 'mongooses',
         'goose' => 'geese',
         'genus' => 'genera',
         'human' => 'humans',
+        'german' => 'germans',
+        'roman' => 'romans',
+        'shaman' => 'shamans',
+        'talisman' => 'talismans',
+        'omen' => 'omens',
+        'abdomen' => 'abdomens',
+        'regimen' => 'regimens',
+        'specimen' => 'specimens',
         'man' => 'men',
         'woman' => 'women',
         'mouse' => 'mice',
         'louse' => 'lice',
         'person' => 'people',
         'tooth' => 'teeth',
-        'ox' => 'oxen',
         'wolf' => 'wolves',
         'calf' => 'calves',
         'leaf' => 'leaves',
@@ -238,6 +255,11 @@ class Pluralizer
      */
     public static function singular(string $value): string
     {
+        // A known irregular singular ('man', 'specimen') is already singular.
+        if (array_key_exists(strtolower($value), static::$irregular)) {
+            return $value;
+        }
+
         if (isset(static::$singularCache[$value])) {
             return static::$singularCache[$value];
         }
@@ -288,9 +310,16 @@ class Pluralizer
             return $value;
         }
 
+        // Each irregular word is looked for at the end of $value, in any
+        // case, and swapped for its other form: '/child$/i' turns
+        // 'grandchild' into 'grandchildren'. The new form copies the case
+        // of the part it replaces: 'Grandchild' -> 'Grandchildren', where
+        // copying the whole word's case gave 'GrandChildren'.
         foreach ($irregulars as $irregular => $pattern) {
-            if (preg_match($pattern = '/'.$pattern.'$/i', $value)) {
-                $irregular = static::matchCase($irregular, $value);
+            $pattern = '/'.preg_quote($pattern, '/').'$/i';
+
+            if (preg_match($pattern, $value, $match)) {
+                $irregular = static::matchCase($irregular, $match[0]);
                 return preg_replace($pattern, $irregular, $value);
             }
         }

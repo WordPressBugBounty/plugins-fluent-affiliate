@@ -109,6 +109,8 @@ class SliceWP extends BaseMigrator
 
         $lastId = (int) Arr::get($status, 'migrated_affiliates', 0);
 
+
+
         $affiliateStatusMap = [
             'active'   => 'active',
             'pending'  => 'pending',
@@ -139,12 +141,6 @@ class SliceWP extends BaseMigrator
         }
 
         $affiliateIds = $affiliates->pluck('id')->toArray();
-
-        $existingIds = array_flip($db->table('fa_affiliates')
-            ->whereIn('id', $affiliateIds)
-            ->pluck('id')
-            ->toArray()
-        );
 
         $groupLinks = $db->table('slicewp_collection_object_relationships')
             ->whereIn('object_id', $affiliateIds)
@@ -182,10 +178,6 @@ class SliceWP extends BaseMigrator
             $affId = $affiliate->id;
             $lastId = $affId;
 
-            if (isset($existingIds[$affId])) {
-                continue;
-            }
-
             $rate = null;
             $faRateType = 'default';
             $faGroupId = null;
@@ -202,8 +194,9 @@ class SliceWP extends BaseMigrator
                 }
             }
 
-            $dataToInsert[] = [
+            $row = [
                 'id'              => $affId,
+                '__source_id'     => $affId,
                 'user_id'         => $affiliate->user_id,
                 'group_id'        => $faGroupId,
                 'rate'            => $rate,
@@ -218,15 +211,11 @@ class SliceWP extends BaseMigrator
                 'created_at'      => $affiliate->date_created,
                 'updated_at'      => $affiliate->date_modified,
             ];
+
+            $dataToInsert[] = $row;
         }
 
-        try {
-            if (!empty($dataToInsert)) {
-                $db->table('fa_affiliates')->insert($dataToInsert);
-            }
-        } catch (\Exception $e) {
-            // Skip this batch to avoid blocking the rest of the migration
-        }
+        $this->insertAffiliates($dataToInsert);
 
         $status['migrated_affiliates'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -288,7 +277,7 @@ class SliceWP extends BaseMigrator
 
             $dataToInsert[] = [
                 'id'              => $commission->id,
-                'affiliate_id'    => $commission->affiliate_id ?: null,
+                'affiliate_id'    => $this->mapAffiliateId($commission->affiliate_id) ?: null,
                 'visit_id'        => $commission->visit_id ?: null,
                 'customer_id'     => $commission->customer_id ?: null,
                 'parent_id'       => $commission->parent_id ?: null,
@@ -306,13 +295,7 @@ class SliceWP extends BaseMigrator
             ];
         }
 
-        try {
-            if (!empty($dataToInsert)) {
-                $db->table('fa_referrals')->insert($dataToInsert);
-            }
-        } catch (\Exception $e) {
-            // Skip this batch to avoid blocking the rest of the migration
-        }
+        $this->insertBatch('fa_referrals', $dataToInsert);
 
         $status['migrated_referrals'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -365,7 +348,7 @@ class SliceWP extends BaseMigrator
             $dataToInsert[] = [
                 'id'              => $customer->id,
                 'user_id'         => $customer->user_id ?: null,
-                'by_affiliate_id' => $customer->affiliate_id ?: null,
+                'by_affiliate_id' => $this->mapAffiliateId($customer->affiliate_id) ?: null,
                 'email'           => $customer->email ?: null,
                 'first_name'      => $customer->first_name ?: null,
                 'last_name'       => $customer->last_name ?: null,
@@ -374,13 +357,7 @@ class SliceWP extends BaseMigrator
             ];
         }
 
-        try {
-            if (!empty($dataToInsert)) {
-                $db->table('fa_customers')->insert($dataToInsert);
-            }
-        } catch (\Exception $e) {
-            // Skip this batch to avoid blocking the rest of the migration
-        }
+        $this->insertBatch('fa_customers', $dataToInsert);
 
         $status['migrated_customers'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -411,7 +388,6 @@ class SliceWP extends BaseMigrator
             'paid'       => 'paid',
             'unpaid'     => 'processing',
             'processing' => 'processing',
-            'failed'     => 'processing',
         ];
 
         $db = $this->db();
@@ -431,8 +407,10 @@ class SliceWP extends BaseMigrator
 
         $payoutIds = $payouts->pluck('id')->toArray();
 
+        // a failed payment never sent the money, so its commissions stay owed
         $allPayments = $db->table('slicewp_payments')
             ->whereIn('payout_id', $payoutIds)
+            ->where('status', '!=', 'failed')
             ->get()
         ;
 
@@ -452,11 +430,22 @@ class SliceWP extends BaseMigrator
 
             $firstPayment = $payments[0];
 
+            // A payout is only a batch wrapper in SliceWP; the money lives on
+            // its payments, so total it from them rather than trusting a column
+            // on the batch row to exist and agree. An open payment keeps the
+            // payout open, as Payout::recountPaymentTotal() does.
+            $totalAmount = 0;
+            $hasOpenPayment = false;
+            foreach ($payments as $payment) {
+                $totalAmount += (float) $payment->amount;
+                $hasOpenPayment = $hasOpenPayment || ($paymentStatusMap[$payment->status] ?? 'paid') !== 'paid';
+            }
+
             $formattedPayout = [
-                'created_by'    => $payout->originator_user_id ?: null,
-                'total_amount'  => $payout->amount,
+                'created_by'    => ($payout->originator_user_id ?? $firstPayment->originator_user_id) ?: null,
+                'total_amount'  => $totalAmount,
                 'payout_method' => $payoutMethodMap[$firstPayment->payout_method] ?? 'manual',
-                'status'        => 'paid',
+                'status'        => $hasOpenPayment ? 'processing' : 'paid',
                 'currency'      => $firstPayment->currency ?: null,
                 'title'         => 'Payout batch at ' . $payout->date_created,
                 'description'   => 'Migrated from SliceWP',
@@ -471,7 +460,7 @@ class SliceWP extends BaseMigrator
 
                 foreach ($payments as $payment) {
                     $transactionId = $db->table('fa_payout_transactions')->insertGetId([
-                        'affiliate_id'  => $payment->affiliate_id,
+                        'affiliate_id'  => $this->mapAffiliateId($payment->affiliate_id),
                         'payout_id'     => $payoutId,
                         'total_amount'  => $payment->amount,
                         'payout_method' => $payoutMethodMap[$payment->payout_method] ?? 'manual',
@@ -559,10 +548,10 @@ class SliceWP extends BaseMigrator
 
             $dataToInsert[] = [
                 'id'           => $visit->id,
-                'affiliate_id' => $visit->affiliate_id ?: null,
+                'affiliate_id' => $this->mapAffiliateId($visit->affiliate_id) ?: null,
                 'referral_id'  => $visit->commission_id ?: null,
-                'url'          => $visit->landing_url ?: null,
-                'referrer'     => $visit->referrer_url ?: null,
+                'url'          => $visit->landing_url ? sanitize_url($visit->landing_url) : null,
+                'referrer'     => $visit->referrer_url ? sanitize_url($visit->referrer_url) : null,
                 'ip'           => $visit->ip_address ?: null,
                 'utm_campaign' => null,
                 'created_at'   => $visit->date_created,
@@ -570,13 +559,7 @@ class SliceWP extends BaseMigrator
             ];
         }
 
-        try {
-            if (!empty($dataToInsert)) {
-                $db->table('fa_visits')->insert($dataToInsert);
-            }
-        } catch (\Exception $e) {
-            // Skip this batch to avoid blocking the rest of the migration
-        }
+        $this->insertBatch('fa_visits', $dataToInsert);
 
         $status['migrated_visits'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -637,11 +620,11 @@ class SliceWP extends BaseMigrator
 
             $dataToInsert[] = [
                 'name'        => $creative->name,
-                'description' => $creative->description ?: null,
+                'description' => $creative->description ? sanitize_text_field($creative->description) : null,
                 'type'        => in_array($creative->type, $validTypes) ? $creative->type : 'text',
-                'image'       => $creative->image_url ?: null,
+                'image'       => $creative->image_url ? sanitize_url($creative->image_url) : null,
                 'text'        => $creative->text ?: null,
-                'url'         => $creative->landing_url ?: null,
+                'url'         => $creative->landing_url ? sanitize_url($creative->landing_url) : null,
                 'privacy'     => 'public',
                 'status'      => $creative->status ?: 'active',
                 'meta'        => $creative->alt_text ? maybe_serialize(['alt_text' => $creative->alt_text]) : null,
@@ -650,13 +633,7 @@ class SliceWP extends BaseMigrator
             ];
         }
 
-        try {
-            if (!empty($dataToInsert)) {
-                $db->table('fa_creatives')->insert($dataToInsert);
-            }
-        } catch (\Exception $e) {
-            // Skip this batch to avoid blocking the rest of the migration
-        }
+        $this->insertBatch('fa_creatives', $dataToInsert);
 
         $status['migrated_creatives'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -668,7 +645,7 @@ class SliceWP extends BaseMigrator
         return $this->migrateCreatives($status);
     }
 
-    public function getCounts()
+    protected function getSourceCounts()
     {
         $db = $this->db();
 
@@ -717,44 +694,6 @@ class SliceWP extends BaseMigrator
         }
 
         return $map;
-    }
-
-    private function hasTable($tableName)
-    {
-        $wpdb = $GLOBALS['wpdb'];
-        $fullName = $wpdb->prefix . $tableName;
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema check; result not worth caching
-        return (bool) $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->esc_like($fullName)));
-    }
-
-    private function getAllowedResetTables()
-    {
-        return [
-            'fa_affiliates', 'fa_referrals', 'fa_customers', 'fa_visits',
-        ];
-    }
-
-    /**
-     * Reset AUTO_INCREMENT to MAX(id)+1 so future organic inserts
-     * don't collide with imported IDs.
-     */
-    private function resetAutoIncrement($tableName)
-    {
-        if (!in_array($tableName, $this->getAllowedResetTables(), true)) {
-            return;
-        }
-
-        $wpdb      = $GLOBALS['wpdb'];
-        $table     = $wpdb->prefix . $tableName;
-        $safeTable = esc_sql($table);
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name from allowlist, sanitized via esc_sql()
-        $maxId = (int) $wpdb->get_var("SELECT MAX(id) FROM `{$safeTable}`");
-
-        if ($maxId > 0) {
-            $next = $maxId + 1;
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name from allowlist, sanitized via esc_sql()
-            $wpdb->query($wpdb->prepare("ALTER TABLE `{$safeTable}` AUTO_INCREMENT = %d", $next));
-        }
     }
 
     /**

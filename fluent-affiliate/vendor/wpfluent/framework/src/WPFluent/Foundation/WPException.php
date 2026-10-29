@@ -11,10 +11,11 @@ use WP_Error;
 class WPException extends Exception {
 
 	/**
-	 * Http code
+	 * Http code, used when the WP_Error's data has no status. WordPress
+	 * answers such an error with a 500, so this does too.
 	 * @var integer
 	 */
-	protected $code = 400;
+	protected $code = 500;
 
 	/**
 	 * Exception message.

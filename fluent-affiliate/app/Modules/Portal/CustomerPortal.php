@@ -170,11 +170,13 @@ class CustomerPortal
             ],
             'additional_sites' => apply_filters('fluent_affiliate/portal/additional_sites', []),
             'i18n'             => TransStrings::getPortalStrings(),
+            'start_of_week'    => (int) get_option('start_of_week', 0),
             'user'             => array_merge($affiliate->user_details, ['avatar' => '']),
             'branded_coupons'  => $formattedCoupons,
             'currency'         => $this->getCurrency(),
             'menu_items'       => Helper::getPortalMenuItems($affiliate),
-            'qr_code_settings' => Arr::get($featuresSaved, 'affiliate_qr_code', [])
+            'qr_code_settings' => Arr::get($featuresSaved, 'affiliate_qr_code', []),
+            'date_format'      => Utility::toDayjsFormat(get_option('date_format'))
         ];
 
         return apply_filters('fluent_affiliate/portal_localize_data', $portalData);
@@ -267,6 +269,7 @@ class CustomerPortal
             'currency'                 => $currency,
             'currency_symbol'          => $currencySymbol,
             'currency_symbol_position' => $currencySymbolPosition,
+            'number_format'            => Arr::get($setting, 'number_format', 'comma_separated'),
         ];
     }
 }

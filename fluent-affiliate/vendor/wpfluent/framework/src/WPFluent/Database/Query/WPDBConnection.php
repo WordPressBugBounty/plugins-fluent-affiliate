@@ -8,10 +8,12 @@ namespace FluentAffiliate\Framework\Database\Query;
 
 use Closure;
 use Exception;
+use RuntimeException;
 use DateTimeInterface;
 use FluentAffiliate\Framework\Foundation\App;
 use FluentAffiliate\Framework\Database\Schema;
 use FluentAffiliate\Framework\Database\QueryException;
+use FluentAffiliate\Framework\Database\UniqueConstraintViolationException;
 use FluentAffiliate\Framework\Database\ConnectionInterface;
 use FluentAffiliate\Framework\Database\MultipleColumnsSelectedException;
 use FluentAffiliate\Framework\Database\Events\QueryExecuted;
@@ -25,6 +27,7 @@ use FluentAffiliate\Framework\Database\Query\Grammars\MySqlGrammar;
 use FluentAffiliate\Framework\Database\Query\Grammars\SQLiteGrammar;
 use FluentAffiliate\Framework\Database\Concerns\ManagesTransactions;
 use FluentAffiliate\Framework\Database\DetectsLostConnections;
+use FluentAffiliate\Framework\Database\DetectsConcurrencyErrors;
 
 use FluentAffiliate\Framework\Database\Events\TransactionBeginning;
 use FluentAffiliate\Framework\Database\Events\TransactionCommitted;
@@ -33,7 +36,7 @@ use FluentAffiliate\Framework\Database\Events\TransactionRolledBack;
 
 class WPDBConnection implements ConnectionInterface
 {
-    use DetectsLostConnections, ManagesTransactions;
+    use DetectsLostConnections, DetectsConcurrencyErrors, ManagesTransactions;
 
     /**
      * $wpdb Global $wpdb instance
@@ -122,7 +125,10 @@ class WPDBConnection implements ConnectionInterface
     }
 
     /**
-     * Populate $wpdb instance & turn off db errors
+     * Populate $wpdb instance.
+     *
+     * Whether $wpdb prints SQL errors is left to WordPress (WP_DEBUG and
+     * WP_DEBUG_DISPLAY): $wpdb is shared by every plugin on the site.
      *
      * @param  $wpdb Global $wpdb instance
      * @return Null
@@ -131,19 +137,66 @@ class WPDBConnection implements ConnectionInterface
     {
         $this->wpdb = $wpdb;
 
-        $this->wpdb->show_errors(
-            $this->shouldShowErrors()
-        );
+        $this->registerSqliteFunctions();
     }
 
     /**
-     * Determine if database errors should be shown.
+     * Register a PHP-backed SOUNDEX() function on the SQLite connection so
+     * phonetic ("sounds like") queries work, mirroring MySQL's native
+     * equivalent.
      *
-     * @return bool
+     * SQLite doesn't ship the function; PHP provides it natively, so we bind
+     * it as a UDF. Using PHP's soundex() here matches the term that
+     * SQLiteGrammar encodes with the same soundex() on the binding side.
+     *
+     * No-ops on MySQL and silently skips if the underlying PDO is unreachable,
+     * so a missing SQLite layer never breaks booting.
+     *
+     * @return void
      */
-    protected function shouldShowErrors()
+    protected function registerSqliteFunctions()
     {
-        return strpos(App::env(), 'prod') === false;
+        if (! $this->isSqlite()) {
+            return;
+        }
+
+        if (! ($pdo = $this->resolveSqlitePdo())) {
+            return;
+        }
+
+        try {
+            $pdo->sqliteCreateFunction('soundex', 'soundex', 1);
+        } catch (\Throwable $e) {
+            // Leave the function unregistered rather than break booting;
+            // whereSoundsLike() will only surface a SQL error if it is
+            // actually used on this connection.
+        }
+    }
+
+    /**
+     * Resolve the real PDO handle behind the WordPress SQLite layer.
+     *
+     * Supports the official "SQLite Database Integration" plugin
+     * (WP_SQLite_Translator::get_pdo()), a dbh that is itself a PDO
+     * (WP-SQLite-DB's PDOEngine), and the shared $GLOBALS['@pdo'] cache.
+     *
+     * @return \PDO|null
+     */
+    protected function resolveSqlitePdo()
+    {
+        $dbh = $this->wpdb->dbh ?? null;
+
+        if ($dbh && method_exists($dbh, 'get_pdo')) {
+            $pdo = $dbh->get_pdo();
+        } elseif ($dbh instanceof \PDO) {
+            $pdo = $dbh;
+        } elseif (isset($GLOBALS['@pdo'])) {
+            $pdo = $GLOBALS['@pdo'];
+        } else {
+            $pdo = null;
+        }
+
+        return $pdo instanceof \PDO ? $pdo : null;
     }
 
     /**
@@ -215,10 +268,9 @@ class WPDBConnection implements ConnectionInterface
      *
      * @param string $query
      * @param array $bindings
-     * @param bool $useReadPdo
      * @return mixed
      */
-    public function selectOne($query, $bindings = [], $useReadPdo = true)
+    public function selectOne($query, $bindings = [])
     {
         return $this->run($query, $bindings, function ($query, $bindings) {
             $query = $this->bindParams($query, $bindings);
@@ -226,8 +278,8 @@ class WPDBConnection implements ConnectionInterface
             $result = $this->wpdb->get_row($query);
 
             if ($result === false || $this->wpdb->last_error) {
-                throw new QueryException(
-                    $query, $bindings, new Exception($this->wpdb->last_error)
+                throw $this->queryException(
+                    $query, $bindings, $this->wpdb->last_error
                 );
             }
 
@@ -240,14 +292,13 @@ class WPDBConnection implements ConnectionInterface
      *
      * @param string $query
      * @param array $bindings
-     * @param bool $useReadPdo
      * @return mixed
      *
      * @throws \FluentAffiliate\Framework\Database\MultipleColumnsSelectedException
      */
-    public function scalar($query, $bindings = [], $useReadPdo = true)
+    public function scalar($query, $bindings = [])
     {
-        $record = $this->selectOne($query, $bindings, $useReadPdo);
+        $record = $this->selectOne($query, $bindings);
 
         if (is_null($record)) {
             return null;
@@ -269,10 +320,9 @@ class WPDBConnection implements ConnectionInterface
      *
      * @param string $query
      * @param array $bindings
-     * @param bool $useReadPdo
      * @return array
      */
-    public function select($query, $bindings = [], $useReadPdo = true)
+    public function select($query, $bindings = [])
     {
         return $this->run($query, $bindings, function ($query, $bindings) {
             $query = $this->bindParams($query, $bindings);
@@ -280,8 +330,8 @@ class WPDBConnection implements ConnectionInterface
             $result = $this->wpdb->get_results($query);
 
             if ($result === false || $this->wpdb->last_error) {
-                throw new QueryException(
-                    $query, $bindings, new Exception($this->wpdb->last_error)
+                throw $this->queryException(
+                    $query, $bindings, $this->wpdb->last_error
                 );
             }
 
@@ -290,76 +340,206 @@ class WPDBConnection implements ConnectionInterface
     }
 
     /**
-     * A hacky way to emulate bind parameters into SQL query
+     * The query as the database receives it: its values filled in and
+     * escaped as they are when it runs, and each % as written.
      *
-     * @param $query
-     * @param $bindings
-     *
-     * @return mixed
+     * @param  string  $query
+     * @param  array  $bindings
+     * @return string
      */
-    protected function bindParams($query, $bindings, $update = false)
+    public function toRawSql($query, array $bindings = [])
     {
-        $query = str_replace('"', '`', $query);
-
-        $bindings = $this->prepareBindings($bindings);
-
-        if (!$bindings) {
-            return $query;
-        }
-
-        $bindings = array_map(function ($replace) {
-
-            if (is_string($replace)) {
-                $replace = "'" . esc_sql($replace) . "'";
-            } elseif ($replace === null) {
-                $replace = "null";
-            }
-
-            return $replace;
-
-        }, $bindings);
-
-        $query = str_replace(array('%', '?'), array('%%', '%s'), $query);
-
-        $query = vsprintf($query, $bindings);
-
-        return $query;
+        return $this->wpdb->remove_placeholder_escape(
+            $this->bindParams($query, $bindings)
+        );
     }
 
     /**
-     * A hacky way to emulate bind parameters into SQL query for mysqli
-     * Only used to run a cursor query using the underlying mysqli instance.
+     * Escape a value for use in SQL, as WordPress escapes it.
+     *
+     * @param  string|float|int|bool|null  $value
+     * @param  bool  $binary
+     * @return string
+     *
+     * @throws \RuntimeException
+     */
+    public function escape($value, $binary = false)
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        if ($binary) {
+            return "x'" . bin2hex($value) . "'";
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_array($value)) {
+            throw new RuntimeException('The database connection does not support escaping arrays.');
+        }
+
+        $value = (string) $value;
+
+        if (strpos($value, "\0") !== false) {
+            throw new RuntimeException('Strings with null bytes cannot be escaped. Use the binary escape option.');
+        }
+
+        if (preg_match('//u', $value) === false) {
+            throw new RuntimeException('Strings with invalid UTF-8 byte sequences cannot be escaped.');
+        }
+
+        return "'" . $this->wpdb->remove_placeholder_escape($this->wpdb->_real_escape($value)) . "'";
+    }
+
+    /**
+     * Bind the parameters into SQL query
      *
      * @param $query
      * @param $bindings
-     *
-     * @return mixed
+     * @return string
      */
-    protected function bindParamsForSqli($query, $bindings, $update = false)
+    protected function bindParams(string $query, array $bindings)
     {
-        $query = str_replace('"', '`', $query);
-
         $bindings = $this->prepareBindings($bindings);
 
-        if (!$bindings) {
-            return $query;
+        [$sql, $values] = $this->compileQuery($query, $bindings, '%s', true);
+
+        if (empty($values)) {
+            return $this->compileQuery($query, $bindings, '%s', false)[0];
         }
 
-        $bindings = array_map(function ($replace) {
+        if ($this->wpdb->dbh instanceof \mysqli) {
+            return $this->wpdb->prepare($sql, ...$values);
+        }
 
-            if (is_string($replace)) {
-                $replace = "'" . esc_sql($replace) . "'";
-            } elseif ($replace === null) {
-                $replace = "null";
+        return vsprintf($sql, array_map(function ($value) {
+            if (is_string($value)) return "'" . esc_sql($value) . "'";
+            return (string) $value;
+        }, $values));
+    }
+
+    /**
+     * Rewrite a query for wpdb, outside quoted values and comments only:
+     * a "quoted" identifier gets backticks, each ? placeholder becomes
+     * $placeholder (or NULL for a null binding, which a prepared %s or a
+     * bound parameter would turn into ''), and with $escapePercent every
+     * % is doubled for wpdb->prepare(). A " or ? inside 'a value', a
+     * `name` or a comment is left as it is.
+     *
+     * @param  string  $query
+     * @param  array   $bindings
+     * @param  string  $placeholder  '%s' for wpdb->prepare(), '?' for mysqli.
+     * @param  bool    $escapePercent
+     * @return array{0:string,1:array}  The query and the bindings its placeholders take.
+     */
+    protected function compileQuery(string $query, array $bindings, string $placeholder, bool $escapePercent): array
+    {
+        $bindings = array_values($bindings);
+        $percent = $escapePercent ? '%%' : '%';
+        $length = strlen($query);
+        $sql = '';
+        $values = [];
+        $index = 0;
+
+        for ($i = 0; $i < $length; $i++) {
+            // Copy the run of characters that need no rewriting at once.
+            if ($run = strcspn($query, "'`-#/?\"%", $i)) {
+                $sql .= substr($query, $i, $run);
+
+                if (($i += $run) >= $length) {
+                    break;
+                }
             }
 
-            return $replace;
+            $char = $query[$i];
 
-        }, $bindings);
+            if ($char === "'" || $char === '`') {
+                $end = $this->endOfQuoted($query, $i, $char);
+            } elseif ($char === '-' && preg_match('/\G--(\s|$)/', $query, $m, 0, $i)) {
+                $end = $this->endOfLine($query, $i);
+            } elseif ($char === '#') {
+                $end = $this->endOfLine($query, $i);
+            } elseif ($char === '/' && substr($query, $i, 2) === '/*') {
+                $end = ($close = strpos($query, '*/', $i + 2)) === false ? $length - 1 : $close + 1;
+            } else {
+                $end = null;
+            }
 
-        $query = vsprintf($query, $bindings);
+            if ($end !== null) {
+                $sql .= str_replace('%', $percent, substr($query, $i, $end - $i + 1));
+                $i = $end;
+            } elseif ($char === '?') {
+                if (array_key_exists($index, $bindings) && $bindings[$index] === null) {
+                    $sql .= 'NULL';
+                } else {
+                    $sql .= $placeholder;
 
-        return $query;
+                    if (array_key_exists($index, $bindings)) {
+                        $values[] = $bindings[$index];
+                    }
+                }
+
+                $index++;
+            } elseif ($char === '"') {
+                $sql .= '`';
+            } elseif ($char === '%') {
+                $sql .= $percent;
+            } else {
+                $sql .= $char;
+            }
+        }
+
+        return [$sql, $values];
+    }
+
+    /**
+     * Find the closing quote of the value or name that opens at $start. A
+     * doubled quote ('' or ``) and, in a value, a backslash escape stay
+     * inside it.
+     *
+     * @param  string  $query
+     * @param  int     $start
+     * @param  string  $quote
+     * @return int
+     */
+    protected function endOfQuoted(string $query, int $start, string $quote): int
+    {
+        $length = strlen($query);
+
+        for ($i = $start + 1; $i < $length; $i++) {
+            if ($query[$i] === '\\' && $quote === "'") {
+                $i++;
+            } elseif ($query[$i] === $quote) {
+                if (($query[$i + 1] ?? '') !== $quote) {
+                    return $i;
+                }
+
+                $i++;
+            }
+        }
+
+        return $length - 1;
+    }
+
+    /**
+     * Find the end of the line comment that starts at $start.
+     *
+     * @param  string  $query
+     * @param  int     $start
+     * @return int
+     */
+    protected function endOfLine(string $query, int $start): int
+    {
+        $end = strpos($query, "\n", $start);
+
+        return $end === false ? strlen($query) - 1 : $end;
     }
 
     /**
@@ -367,13 +547,12 @@ class WPDBConnection implements ConnectionInterface
      *
      * @param string $query
      * @param array $bindings
-     * @param bool $useReadPdo
      * @return \Generator
      * @throws \FluentAffiliate\Framework\Database\QueryException
      */
-    public function cursor($query, $bindings = [], $useReadPdo = true)
+    public function cursor($query, $bindings = [])
     {
-        // If not mysqli, just mimic the cursor but does not do the cursor query
+        // If not mysqli (e.g., SQLite), fallback to standard select
         if (!$this->wpdb->dbh instanceof \mysqli) {
             foreach ($this->select($query, $bindings) as $row) {
                 yield $row;
@@ -381,7 +560,10 @@ class WPDBConnection implements ConnectionInterface
             return;
         }
 
-        // Flush previous queries and check connection
+        [$preparedQuery, $bindings] = $this->compileQuery(
+            $query, $this->prepareBindings($bindings), '?', false
+        );
+
         $this->wpdb->flush();
         $this->wpdb->insert_id = 0;
         $this->wpdb->check_current_query = true;
@@ -389,7 +571,7 @@ class WPDBConnection implements ConnectionInterface
         if (!$this->wpdb->check_connection()) {
             throw new QueryException(
                 $query, $bindings, new Exception(
-                    $this->wpdb->last_error || 'Error reconnecting to the database.'
+                    $this->wpdb->last_error ?: 'Error reconnecting to database.'
                 )
             );
         }
@@ -398,12 +580,8 @@ class WPDBConnection implements ConnectionInterface
             $this->wpdb->timer_start();
         }
 
-        // Prepare the statement
-        $statement = $this->wpdb->dbh->prepare(
-            $this->bindParamsForSqli($query, $bindings)
-        );
+        $statement = $this->wpdb->dbh->prepare($preparedQuery);
 
-        // Check if the statement preparation failed
         if ($statement === false) {
             throw new QueryException(
                 $query, $bindings, new Exception(
@@ -412,39 +590,37 @@ class WPDBConnection implements ConnectionInterface
             );
         }
 
-        // Bind parameters if necessary
-        if ($bindings) {
+        if (!empty($bindings)) {
             $types = '';
             foreach ($bindings as $binding) {
-                $types .= is_int($binding) ? 'i' : (
-                    is_double($binding) ? 'd' : 's'
-                );
+                if (is_int($binding)) {
+                    $types .= 'i';
+                } elseif (is_double($binding)) {
+                    $types .= 'd';
+                } else {
+                    $types .= 's';
+                }
             }
 
             $statement->bind_param($types, ...$bindings);
         }
 
-        // Execute the statement and check if it's successful
         if ($statement->execute()) {
-            // Check if the statement has a result set
-            if ($result = $statement->get_result()) {
-                $i = 0;
+            $result = $statement->get_result();
+            
+            if ($result) {
                 while ($row = $result->fetch_assoc()) {
-                    $this->wpdb->last_result[$i] = $row;
-                    $i++;
-                    yield $row;
+                    yield (object) $row;
                 }
-
                 $result->free();
             } else {
-                // Handle the case where no result is returned
-                throw new QueryException(
-                    $query, $bindings, new Exception(
-                        'No result set returned from query.'
-                    )
-                );
+                if ($statement->errno) {
+                    throw $this->queryException(
+                        $query, $bindings, $statement->error, $statement->errno
+                    );
+                }
             }
-
+            $statement->close();
             return;
         }
 
@@ -456,8 +632,8 @@ class WPDBConnection implements ConnectionInterface
 
             $this->wpdb->last_error = $err;
 
-            throw new QueryException(
-                $query, $bindings, new Exception($err)
+            throw $this->queryException(
+                $query, $bindings, $err, $statement->errno
             );
         }
     }
@@ -472,36 +648,26 @@ class WPDBConnection implements ConnectionInterface
      */
     public function rawCursor($query, $bindings = [])
     {
-        // Sanitize bindings manually
-        if (!empty($bindings)) {
-            foreach ($bindings as $binding) {
-                $escaped = $this->wpdb->dbh->real_escape_string($binding);
-                // Replace the first occurrence of ? with the escaped binding
-                $query = preg_replace('/\?/', "'{$escaped}'", $query, 1);
-            }
-        }
+        $query = $this->bindParams($query, $bindings);
 
-        // If not mysqli, mimic cursor
         if (!$this->wpdb->dbh instanceof \mysqli) {
-            foreach ($this->select($query) as $row) {
-                yield $row;
-            }
+            foreach ($this->select($query) as $row) { yield $row; }
             return;
         }
 
-        // Real raw cursor
         $stmt = $this->wpdb->dbh->query($query, MYSQLI_USE_RESULT);
 
-        if ($stmt) {
-            while ($row = $stmt->fetch_assoc()) {
-                yield $row;
+        if ($stmt instanceof \mysqli_result) {
+            try {
+                while ($row = $stmt->fetch_assoc()) {
+                    yield (object) $row;
+                }
+            } finally {
+                $stmt->free();
             }
-        } else {
-            $err = $this->wpdb->dbh->error;
+        } elseif ($this->wpdb->dbh->error) {
             throw new QueryException(
-                $query, $bindings, new Exception(
-                    $err ? $err : 'MySQL Error: ' . $this->wpdb->dbh->errno
-                )
+                $query, $bindings, new Exception($this->wpdb->dbh->error)
             );
         }
     }
@@ -557,8 +723,8 @@ class WPDBConnection implements ConnectionInterface
             $result = $this->unprepared($query);
 
             if ($result === false || $this->wpdb->last_error) {
-                throw new QueryException(
-                    $query, $bindings, new Exception($this->wpdb->last_error)
+                throw $this->queryException(
+                    $query, $bindings, $this->wpdb->last_error
                 );
             }
 
@@ -581,8 +747,8 @@ class WPDBConnection implements ConnectionInterface
             $result = $this->wpdb->query($query);
 
             if ($result === false || $this->wpdb->last_error) {
-                throw new QueryException(
-                    $query, $bindings, new Exception($this->wpdb->last_error)
+                throw $this->queryException(
+                    $query, $bindings, $this->wpdb->last_error
                 );
             }
 
@@ -679,6 +845,9 @@ class WPDBConnection implements ConnectionInterface
     {
         $this->queryGrammar->setTablePrefix($this->wpdb);
 
+        // The grammar escapes values through the connection.
+        $this->queryGrammar->setConnection($this);
+
         return $this->queryGrammar;
     }
 
@@ -767,6 +936,10 @@ class WPDBConnection implements ConnectionInterface
      */
     public function getDatabaseName()
     {
+        if ($this->isSqlite()) {
+            return 'sqlite';
+        }
+
         return $this->wpdb->dbname;
     }
 
@@ -774,6 +947,8 @@ class WPDBConnection implements ConnectionInterface
      * Get the server version for the connection.
      *
      * @return string
+     *
+     * @phpstan-ignore-next-line
      */
     public function getServerVersion(): string
     {
@@ -890,5 +1065,80 @@ class WPDBConnection implements ConnectionInterface
     protected function getElapsedTime($start)
     {
         return round((microtime(true) - $start) * 1000, 2);
+    }
+
+    /**
+     * Get the table prefix for the connection.
+     * 
+     * @return [type] [description]
+     */
+    public function getTablePrefix()
+    {
+        if (!$this->tablePrefix) {
+            $this->tablePrefix = $this->queryGrammar->getTablePrefix();
+        }
+
+        return $this->tablePrefix;
+    }
+
+    /**
+     * Get the table name with the table prefix.
+     * 
+     * @param  string $table
+     * @return string       
+     */
+    public function getTableName($table)
+    {
+        return $this->getTablePrefix() . $table;
+    }
+
+    /**
+     * Build the exception for a failed query: a unique key it broke
+     * gives a UniqueConstraintViolationException, so createOrFirst() can
+     * find the row another request created; anything else a
+     * QueryException.
+     *
+     * @param  string   $query
+     * @param  array    $bindings
+     * @param  string   $message
+     * @param  int|null $errno The MySQL error number, when known.
+     * @return \FluentAffiliate\Framework\Database\QueryException
+     */
+    protected function queryException($query, $bindings, $message, $errno = null)
+    {
+        $previous = new Exception($message);
+
+        return $this->isUniqueConstraintViolation($message, $errno)
+            ? new UniqueConstraintViolationException($query, $bindings, $previous)
+            : new QueryException($query, $bindings, $previous);
+    }
+
+    /**
+     * Whether a failed query broke a unique key. On MySQL the error
+     * number (1062) decides; otherwise the message does, in the exact
+     * form MySQL or SQLite writes it, since the SQLite plugin's message
+     * also carries the whole query and its values.
+     *
+     * @param  string   $message
+     * @param  int|null $errno
+     * @return bool
+     */
+    protected function isUniqueConstraintViolation($message, $errno = null)
+    {
+        if (is_null($errno) && $this->wpdb->dbh instanceof \mysqli) {
+            $errno = $this->wpdb->dbh->errno;
+        }
+
+        if ($errno) {
+            return (int) $errno === 1062;
+        }
+
+        // MySQL: "Duplicate entry 'a' for key 'sku'", the whole message.
+        // SQLite: "SQLSTATE[23000]: Integrity constraint violation: 19
+        // UNIQUE constraint failed: wp_items.sku".
+        return (bool) preg_match(
+            "/^Duplicate entry '.*' for key '|Integrity constraint violation: 19 UNIQUE constraint failed/s",
+            (string) $message
+        );
     }
 }

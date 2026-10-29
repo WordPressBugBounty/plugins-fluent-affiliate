@@ -12,6 +12,7 @@ use FluentAffiliate\App\Models\Payout;
 use FluentAffiliate\App\Models\Referral;
 use FluentAffiliate\App\Models\Transaction;
 use FluentAffiliate\App\Models\Visit;
+use FluentAffiliate\App\Services\Migrator\BaseMigrator;
 use FluentAffiliate\App\Services\Migrator\Providers\AffiliateWP;
 use FluentAffiliate\App\Services\Migrator\Providers\AffiliateManagerMigrator;
 use FluentAffiliate\App\Services\Migrator\Providers\SolidAffiliate;
@@ -90,7 +91,7 @@ class MigrationController extends Controller
 
         $migrationLogs = apply_filters('fluent_affiliate/get_migration_statistics', [
             'affiliate_groups' => [
-                'total'    => $counts['affiliate_groups'] ?? 0,
+                'total'    => $counts['affiliate_groups'],
                 'migrated' => AffiliateGroup::count()
             ],
             'affiliates' => [
@@ -147,7 +148,23 @@ class MigrationController extends Controller
             ], 422);
         }
 
-        if ($request->get('reset_migration') === 'yes') {
+        $isReset = $request->get('reset_migration') === 'yes';
+
+        // the importers keep the source ids and skip any id that is already taken,
+        // so a fresh run into a site with data would drop those rows and relink the
+        // site's own. Resuming this importer's own unfinished run stays allowed.
+        $status = $migrator->getCurrentStatus();
+        $hasProgress = Arr::get($status, 'current_stage') !== 'completed' && array_filter($status, function ($value, $key) {
+            return strpos($key, 'migrated_') === 0 && $value;
+        }, ARRAY_FILTER_USE_BOTH);
+
+        if (($isReset || !$hasProgress) && array_sum($this->getCurrentDataCounts())) {
+            return $this->sendError([
+                'message' => __('FluentAffiliate already has data. Wipe the existing data first, then start the migration.', 'fluent-affiliate')
+            ], 422);
+        }
+
+        if ($isReset) {
             $migrator->updateCurrentStatus([], false);
         }
 
@@ -258,6 +275,8 @@ class MigrationController extends Controller
         delete_option('_fla_solid_affiliate_migrations_status');
         delete_option('_fla_slicewp_migrations_status');
         delete_option('_fla_ultimate_affiliate_migrations_status');
+
+        BaseMigrator::clearAffiliateIdMaps();
 
         fluentAffiliate_update_option('affwp_migrated_recount', 0);
         fluentAffiliate_update_option('solid_affiliate_migrated_recount', 0);

@@ -141,7 +141,7 @@ class DeepIntegration
                 ->orderBy('id', 'ASC')
                 ->get();
 
-            if (!$affiliates) {
+            if (!count($affiliates)) {
                 // nothing left to read, so the counter reflects the whole table
                 fluentcrm_update_option('_fluent_aff_sync_count', fluentCrmDb()->table('fa_affiliates')->count());
                 $run = false;
@@ -408,7 +408,7 @@ class DeepIntegration
 
         if (in_array($valueKey, $dates) && $propValue) {
             $dateFormat = get_option('date_format');
-            return gmdate($dateFormat, strtotime($propValue));
+            return date_i18n($dateFormat, strtotime($propValue));
         }
 
         return $propValue;

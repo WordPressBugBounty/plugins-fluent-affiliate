@@ -45,7 +45,10 @@ trait MacroableTrait
 
         foreach ($methods as $method) {
             if ($replace || ! static::hasMacro($method->name)) {
-                $method->setAccessible(true);
+                if (PHP_VERSION_ID < 80100) {
+                    $method->setAccessible(true);
+                }
+
                 static::macro($method->name, $method->invoke($mixin));
             }
         }

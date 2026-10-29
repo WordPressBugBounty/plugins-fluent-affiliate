@@ -149,10 +149,11 @@ class AddonService
      */
     public static function installAddons(array $addonKeys)
     {
-        if (!current_user_can('install_plugins')) {
+        // the installer also activates the plugin, which is a capability of its own
+        if (!current_user_can('install_plugins') || !current_user_can('activate_plugins')) {
             return [
                 'success' => false,
-                'message' => __('You do not have permission to install plugins.', 'fluent-affiliate'),
+                'message' => __('You do not have permission to install and activate plugins.', 'fluent-affiliate'),
             ];
         }
 

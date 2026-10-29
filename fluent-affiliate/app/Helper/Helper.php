@@ -180,6 +180,45 @@ class Helper
         return apply_filters('fluent_affiliate/suggested_colors', $colors);
     }
 
+    /**
+     * Clamp a requested page size to 1–150. 150 is the largest page size the
+     * admin and portal tables offer (FluentPagination.vue), and anything below 1
+     * would divide by zero in the paginator or drop the LIMIT.
+     *
+     * @param mixed $perPage
+     * @return int
+     */
+    public static function clampPerPage($perPage)
+    {
+        return max(1, min(150, (int) $perPage));
+    }
+
+    /**
+     * Payout methods an admin can pick, keyed by slug. A gateway add-on adds
+     * itself here; `manual` is always available.
+     */
+    public static function getPayoutMethods()
+    {
+        $methods = apply_filters('fluent_affiliate/payout_methods', [
+            'manual' => __('Manual', 'fluent-affiliate'),
+        ]);
+
+        $methods = is_array($methods) ? $methods : [];
+        $methods['manual'] = Arr::get($methods, 'manual', __('Manual', 'fluent-affiliate'));
+
+        return $methods;
+    }
+
+    /**
+     * Paid by a registered gateway, not by hand. Importers store source
+     * methods such as `paypal` on manual rows, so an unregistered method is
+     * treated as manual.
+     */
+    public static function isGatewayPayoutMethod($method)
+    {
+        return $method && $method !== 'manual' && array_key_exists($method, static::getPayoutMethods());
+    }
+
     public static function getPayoutFormSchema()
     {
         return apply_filters('fluent_affiliate/payout_form_schema', [
@@ -190,6 +229,7 @@ class Helper
             'start_date' => '',
             'end_date' => '',
             'min_payout' => '',
+            'ignore_holding_period' => 'no',
             'payout_status' => 'processing',
             'custom_fields' => []
         ]);

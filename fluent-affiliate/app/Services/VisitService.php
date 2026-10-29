@@ -163,28 +163,7 @@ class VisitService
             return '127.0.0.1';
         }
 
-        $ipAddress = '';
-        if (isset($_SERVER["HTTP_CF_CONNECTING_IP"])) {
-            $ipAddress = sanitize_text_field(wp_unslash($_SERVER["REMOTE_ADDR"]));
-            //If it's a valid Cloudflare request
-            if (self::isCfIp($ipAddress)) {
-                //Use the CF-Connecting-IP header.
-                $ipAddress = self::validateProxyIp(sanitize_text_field(wp_unslash($_SERVER['HTTP_CF_CONNECTING_IP'])));
-            }
-        } else if ($_SERVER['REMOTE_ADDR'] == '127.0.0.1' && self::shouldTrustProxyHeaders()) {
-            // most probably it's local reverse proxy
-            if (isset($_SERVER["HTTP_CLIENT_IP"])) {
-                $ipAddress = self::validateProxyIp(sanitize_text_field(wp_unslash($_SERVER["HTTP_CLIENT_IP"])));
-            } else if (isset($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-                $ipAddress = self::validateProxyIp(sanitize_text_field(wp_unslash($_SERVER['HTTP_X_FORWARDED_FOR'])));
-            }
-        }
-
-        if (!$ipAddress) {
-            $ipAddress = sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR']));
-        }
-
-        $ipAddress = preg_replace('/^(\d+\.\d+\.\d+\.\d+):\d+$/', '\1', $ipAddress);
+        $ipAddress = self::resolveClientIp($_SERVER);
 
         $ipAddress = apply_filters('fluent_affiliate/user_ip', $ipAddress);
 
@@ -196,28 +175,42 @@ class VisitService
     }
 
     /**
-     * Proxy headers are attacker controlled, so a value is only accepted when it
-     * really is an IP address. getIp() keys the auth rate limit, a spoofable one
-     * resets the throttle at will.
-     *
-     * @param string $value
-     * @return string empty when the header does not hold a usable IP
+     * @param array $serverData $_SERVER or an equivalent
+     * @return string
      */
-    protected static function validateProxyIp($value)
+    public static function resolveClientIp($serverData)
     {
-        $value = sanitize_text_field(wp_unslash($value));
+        $remoteAddr = preg_replace('/^(\d+\.\d+\.\d+\.\d+):\d+$/', '\1', sanitize_text_field(wp_unslash((string) ($serverData['REMOTE_ADDR'] ?? ''))));
+        $cloudflareIp = (string) rest_is_ip_address(sanitize_text_field(wp_unslash((string) ($serverData['HTTP_CF_CONNECTING_IP'] ?? ''))));
 
-        $value = trim(current(explode(',', $value)));
+        if ($cloudflareIp && self::isCfIp($remoteAddr)) {
+            return $cloudflareIp;
+        }
 
-        return (string)rest_is_ip_address($value);
+        // only the right-most hop is written by the proxy; the rest is client sent
+        if (self::isTrustedProxy($remoteAddr)) {
+            $hops = explode(',', sanitize_text_field(wp_unslash((string) ($serverData['HTTP_X_FORWARDED_FOR'] ?? ''))));
+            $forwardedIp = (string) rest_is_ip_address(trim(end($hops)));
+
+            if ($forwardedIp) {
+                return $forwardedIp;
+            }
+        }
+
+        return $remoteAddr;
     }
 
     /**
+     * @param string $remoteAddr
      * @return bool
      */
-    protected static function shouldTrustProxyHeaders()
+    protected static function isTrustedProxy($remoteAddr)
     {
-        return (bool)apply_filters('fluent_affiliate/trust_proxy_headers', true);
+        if (!apply_filters('fluent_affiliate/trust_proxy_headers', true)) {
+            return false;
+        }
+
+        return in_array($remoteAddr, (array)apply_filters('fluent_affiliate/trusted_proxies', ['127.0.0.1']), true);
     }
 
     /**

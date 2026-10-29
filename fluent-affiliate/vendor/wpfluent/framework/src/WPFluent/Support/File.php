@@ -240,13 +240,13 @@ class File
      * Create a directory.
      * 
      * @param string $path
-     * @param int $chmod
+     * @param int|false $chmod Defaults to WordPress's FS_CHMOD_DIR.
      * @param string|int|false $chown Optional. A user name or number.
      * @param string|int|false $chgrp Optional. A group name or number.
      * @return bool
      */
     public static function mkdir(
-        $path, $chmod = FS_CHMOD_DIR,  $chown = false, $chgrp = false
+        $path, $chmod = false, $chown = false, $chgrp = false
     )
     {
         return static::fileSystem()->mkdir($path, $chmod,  $chown, $chgrp);
@@ -256,13 +256,13 @@ class File
      * Create a directory.
      * 
      * @param string $path
-     * @param int $chmod
+     * @param int|false $chmod Defaults to WordPress's FS_CHMOD_DIR.
      * @param string|int|false $chown Optional. A user name or number.
      * @param string|int|false $chgrp Optional. A group name or number.
      * @return bool
      */
     public static function makeDirectory(
-        $path, $chmod = FS_CHMOD_DIR,  $chown = false, $chgrp = false
+        $path, $chmod = false, $chown = false, $chgrp = false
     )
     {
         return static::mkdir($path, $chmod,  $chown, $chgrp);
@@ -502,6 +502,11 @@ class File
 
         $content = str_replace("\r", "\n", $content);
 
+        // Read 'Name: value' header lines. /m makes ^ and $ work on each
+        // line. A line may start with '<?php', then any spaces, tabs, /, *,
+        // # or @; the name runs up to the first ':' and the value is the
+        // rest of the line: ' * Plugin Name: My Plugin' gives
+        // ['plugin_name' => 'My Plugin'].
         $pattern = '/^(?:[ \t]*<\?php)?[ \t\/*#@]*(.*?):(.*)$/mi';
 
         if (preg_match_all($pattern, $content, $matches)) {
@@ -570,6 +575,11 @@ class File
         $fs = static::fileSystem();
 
         if (!method_exists($fs, $method)) {
+            // Turn a camelCase name into snake_case: put '_' between a
+            // lower-case letter or digit and a capital, then before a capital
+            // that starts a word after other capitals, and lower-case it all:
+            // 'putContents' -> 'put_contents', 'getHTTPResponse' ->
+            // 'get_http_response'.
             $method = strtolower(
                 preg_replace([
                     '/([a-z\d])([A-Z])/', '/([^_])([A-Z][a-z])/'

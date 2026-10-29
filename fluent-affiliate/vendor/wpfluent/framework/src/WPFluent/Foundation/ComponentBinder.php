@@ -6,6 +6,7 @@ use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\Framework\View\View;
 use FluentAffiliate\Framework\Cache\Cache;
 use FluentAffiliate\Framework\Http\URL;
+use FluentAffiliate\Framework\Http\UrlGenerator;
 use FluentAffiliate\Framework\Support\Mail;
 use FluentAffiliate\Framework\Support\Pipeline;
 use FluentAffiliate\Framework\Http\Router;
@@ -16,6 +17,7 @@ use FluentAffiliate\Framework\Encryption\Encrypter;
 use FluentAffiliate\Framework\Database\Orm\Model;
 use FluentAffiliate\Framework\Validator\Validator;
 use FluentAffiliate\Framework\Foundation\RequestGuard;
+use FluentAffiliate\Framework\Foundation\Exceptions\ExceptionHandler;
 use FluentAffiliate\Framework\Database\DatabaseManager;
 use FluentAffiliate\Framework\Database\DatabaseTransactionsManager;
 use FluentAffiliate\Framework\Database\ConnectionResolver;
@@ -24,7 +26,6 @@ use FluentAffiliate\Framework\Pagination\AbstractCursorPaginator;
 use FluentAffiliate\Framework\Pagination\AbstractPaginator;
 use FluentAffiliate\Framework\Pagination\CursorPaginator;
 use FluentAffiliate\Framework\Pagination\Cursor;
-use WpOrg\Requests\Exception\Http\Status401;
 
 class ComponentBinder
 {
@@ -54,6 +55,7 @@ class ComponentBinder
         'Mail',
         'Paginator',
         'Pipeline',
+        'ExceptionHandler',
     ];
 
     /**
@@ -107,14 +109,14 @@ class ComponentBinder
             
             $request->setRequestInstance($app->request);
 
-            if (method_exists($request, 'authorize')) {
-                if(!$request->authorize()) throw new Status401;
+            if (method_exists($request, 'authorize') && !$request->authorize()) {
+                $request->failedAuthorization();
             }
 
-            $request->merge($request->beforeValidation());
+            $request->merge((array) $request->beforeValidation());
             $request->validate();
             $request->merge((array) $request->afterValidation(
-                $app->make('validator')
+                $request->getValidator()
             ));
         });
     }
@@ -138,9 +140,7 @@ class ComponentBinder
      */
     protected function bindRequest()
     {
-        $method = $this->getBindingMethod('singleton');
-
-        $this->app->$method(Request::class, function ($app) {
+        $this->app->singleton(Request::class, function ($app) {
             return $this->resolveRequest($app);
         });
 
@@ -155,30 +155,13 @@ class ComponentBinder
      */
     protected function bindResponse()
     {
-        $method = $this->getBindingMethod('singleton');
-
-        $this->app->$method(Response::class, function($app) {
+        $this->app->singleton(Response::class, function($app) {
             return new Response($app);
         });
 
         $this->app->alias(Response::class, 'response');
         
         $this->addBackwardCompatibleAlias(Response::class);
-    }
-
-    /**
-     * Get the binding method to bind a component.
-     * In the testing environment, we use bind
-     * method instead of singleton method.
-     * 
-     * @param  string $original
-     * @return string
-     */
-    protected function getBindingMethod($original)
-    {
-        return str_starts_with(
-            $this->app->env(), 'testing'
-        ) ? 'bind' : $original;
     }
 
     /**
@@ -242,10 +225,11 @@ class ComponentBinder
      */
     protected function bindDB()
     {
+        $connection = new WPDBConnection($GLOBALS['wpdb']);
+
         $resolver = new ConnectionResolver([
-            'mysql' => new WPDBConnection(
-                $GLOBALS['wpdb']
-            ),
+            'mysql' => $connection,
+            'sqlite' => $connection,
         ]);
 
         $resolver->setDefaultConnection('mysql');
@@ -270,7 +254,7 @@ class ComponentBinder
     protected function bindUrl()
     {
         $this->app->bind(URL::class, function($app) {
-            return new URL($app->make(Encrypter::class));
+            return new URL('', new UrlGenerator($app));
         });
 
         $this->app->alias(URL::class, 'url');
@@ -341,7 +325,26 @@ class ComponentBinder
             return new Pipeline($app);
         });
 
-        $this->app->alias(Pipeline::class, 'pipeline');  
+        $this->app->alias(Pipeline::class, 'pipeline');
+    }
+
+    /**
+     * Bind the exception-handler registry into the container.
+     *
+     * Default is the bare `Foundation\Exceptions\ExceptionHandler` (no
+     * renderables registered). Plugins override by re-binding their own
+     * subclass to the same key from `boot/bindings.php` BEFORE the first
+     * request hits Route.
+     *
+     * @return null
+     */
+    protected function bindExceptionHandler()
+    {
+        $this->app->singleton(ExceptionHandler::class, function ($app) {
+            return new ExceptionHandler();
+        });
+
+        $this->app->alias(ExceptionHandler::class, 'exception.handler');
     }
 
     /**

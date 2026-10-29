@@ -94,7 +94,8 @@ class Bootstrap extends BaseConnector
             'id'       => Arr::get($payment, 'id'),
             // Payment total with tax amount  is in cents
             'total'    => Arr::get($payment, 'payment_total', 0) / 100,
-            'subtotal' => (Arr::get($payment, 'payment_total', 0) - $discountAmount - $taxAmount) / 100,
+            // payment_total is stored before the coupon; calculateOrderTotal() subtracts the discount
+            'subtotal' => (Arr::get($payment, 'payment_total', 0) - $taxAmount) / 100,
             'tax'      => $taxAmount / 100,
             'discount' => $discountAmount / 100,
             'status'   => Arr::get($payment, 'payment_status'),
@@ -110,8 +111,9 @@ class Bootstrap extends BaseConnector
                 [
                     'item_id'  => Arr::get($payment, 'form_id'),
                     'title'    => Arr::get($payment, 'post_title', ''),
-                    'subtotal' => (Arr::get($payment, 'payment_total', 0) - $discountAmount - $taxAmount) / 100,
+                    'subtotal' => (Arr::get($payment, 'payment_total', 0) - $taxAmount) / 100,
                     'tax'      => $taxAmount / 100,
+                    'discount' => $discountAmount / 100,
                     'shipping' => 0,
                     'total'    => Arr::get($payment, 'payment_total', 0) / 100,
                 ]

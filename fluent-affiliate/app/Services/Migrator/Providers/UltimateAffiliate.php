@@ -92,6 +92,8 @@ class UltimateAffiliate extends BaseMigrator
 
         $lastId = (int) Arr::get($status, 'migrated_affiliates', 0);
 
+
+
         $db = $this->db();
 
         $affiliates = $db->table('uap_affiliates')
@@ -110,12 +112,6 @@ class UltimateAffiliate extends BaseMigrator
 
         $affiliateIds = $affiliates->pluck('id')->toArray();
 
-        $existingIds = array_flip($db->table('fa_affiliates')
-            ->whereIn('id', $affiliateIds)
-            ->pluck('id')
-            ->toArray()
-        );
-
         $rankMap     = $this->getRankMap();
         $rankGroupMap = $this->getGroupIdMap();
 
@@ -131,10 +127,6 @@ class UltimateAffiliate extends BaseMigrator
             $affId = $affiliate->id;
             $lastId = $affId;
 
-            if (isset($existingIds[$affId])) {
-                continue;
-            }
-
             // UAP affiliate uid links to a WP user; keep it null when absent rather than
             $userId = (int) $affiliate->uid ?: null;
 
@@ -146,8 +138,9 @@ class UltimateAffiliate extends BaseMigrator
 
             $paymentEmail = $userId ? get_user_meta($userId, 'uap_affiliate_paypal_email', true) : '';
 
-            $dataToInsert[] = [
+            $row = [
                 'id'              => $affId,
+                '__source_id'     => $affId,
                 'user_id'         => $userId,
                 'group_id'        => $groupId,
                 'rate'            => null,
@@ -162,9 +155,11 @@ class UltimateAffiliate extends BaseMigrator
                 'created_at'      => $this->normalizeDate($affiliate->start_data),
                 'updated_at'      => $this->normalizeDate($affiliate->start_data),
             ];
+
+            $dataToInsert[] = $row;
         }
 
-        $this->insertBatch('fa_affiliates', $dataToInsert);
+        $this->insertAffiliates($dataToInsert);
 
         $status['migrated_affiliates'] = $lastId;
         $this->updateCurrentStatus($status, false);
@@ -223,11 +218,11 @@ class UltimateAffiliate extends BaseMigrator
 
             $dataToInsert[] = [
                 'id'              => $referral->id,
-                'affiliate_id'    => $referral->affiliate_id ?: null,
+                'affiliate_id'    => $this->mapAffiliateId($referral->affiliate_id) ?: null,
                 'visit_id'        => $referral->visit_id ?: null,
                 'parent_id'       => $referral->parent_referral_id ?: null,
                 'customer_id'     => null, // linked after customers stage
-                'description'     => $referral->description ?: null,
+                'description'     => $referral->description ? sanitize_text_field($referral->description) : null,
                 'status'          => $this->mapReferralStatus($referral->status, $referral->payment),
                 'amount'          => $referral->amount ?: 0,
                 'order_total'     => 0,
@@ -302,7 +297,7 @@ class UltimateAffiliate extends BaseMigrator
             ->get(['user_id', 'by_affiliate_id'])
         ;
         foreach ($existingRows as $row) {
-            $existingPairs[$row->user_id . '-' . $row->by_affiliate_id] = true;
+            $existingPairs[$row->user_id . '-' . (int) $row->by_affiliate_id] = true;
         }
 
         // Prime the user cache so the per-row get_user_by('id') below are cache hits.
@@ -318,7 +313,7 @@ class UltimateAffiliate extends BaseMigrator
 
             $userId = (int) $customer->refferal_wp_uid;
 
-            if (isset($existingPairs[$userId . '-' . (int) $customer->affiliate_id])) {
+            if (isset($existingPairs[$userId . '-' . (int) $this->mapAffiliateId($customer->affiliate_id)])) {
                 continue;
             }
 
@@ -342,7 +337,7 @@ class UltimateAffiliate extends BaseMigrator
 
             $dataToInsert[] = [
                 'user_id'         => $userId ?: null,
-                'by_affiliate_id' => $customer->affiliate_id ?: null,
+                'by_affiliate_id' => $this->mapAffiliateId($customer->affiliate_id) ?: null,
                 'email'           => $email ?: null,
                 'first_name'      => substr($firstName, 0, 192),
                 'last_name'       => substr($lastName, 0, 192),
@@ -587,10 +582,10 @@ class UltimateAffiliate extends BaseMigrator
 
             $dataToInsert[] = [
                 'id'           => $visit->id,
-                'affiliate_id' => $visit->affiliate_id ?: null,
+                'affiliate_id' => $this->mapAffiliateId($visit->affiliate_id) ?: null,
                 'referral_id'  => $visit->referral_id ?: null,
-                'url'          => $visit->url ?: null,
-                'referrer'     => $visit->ref_url ?: null,
+                'url'          => $visit->url ? sanitize_url($visit->url) : null,
+                'referrer'     => $visit->ref_url ? sanitize_url($visit->ref_url) : null,
                 'utm_campaign' => $visit->campaign_name ?: null,
                 'ip'           => $visit->ip ?: null,
                 'created_at'   => $this->normalizeDate($visit->visit_date),
@@ -653,13 +648,15 @@ class UltimateAffiliate extends BaseMigrator
                 continue;
             }
 
+            $image = $banner->image ?: $banner->url;
+
             $dataToInsert[] = [
                 'name'        => $banner->name,
-                'description' => $banner->description ?: null,
+                'description' => $banner->description ? sanitize_text_field($banner->description) : null,
                 'type'        => 'image',
-                'image'       => $banner->image ?: $banner->url,
+                'image'       => $image ? sanitize_url($image) : null,
                 'text'        => null,
-                'url'         => $banner->url ?: null,
+                'url'         => $banner->url ? sanitize_url($banner->url) : null,
                 'privacy'     => 'public',
                 'status'      => $banner->status ? 'active' : 'inactive',
                 'created_at'  => $this->normalizeDate($banner->DATE),
@@ -679,7 +676,7 @@ class UltimateAffiliate extends BaseMigrator
         return $this->migrateCreatives($status);
     }
 
-    public function getCounts()
+    protected function getSourceCounts()
     {
         $db = $this->db();
 
@@ -709,45 +706,6 @@ class UltimateAffiliate extends BaseMigrator
         }
 
         return $counts;
-    }
-
-    /**
-     * Bulk-insert a batch; on failure fall back to per-row inserts so one bad row
-     * (e.g. a zero-date rejected under strict SQL mode) can't drop the whole batch.
-     * Skipped source ids are logged (no PII) for auditing.
-     */
-    private function insertBatch($table, $rows)
-    {
-        if (empty($rows)) {
-            return;
-        }
-
-        try {
-            $this->db()->table($table)->insert($rows);
-            return;
-        } catch (\Exception $e) {
-            // Bulk insert failed — retry row-by-row below.
-        }
-
-        $skipped = [];
-
-        foreach ($rows as $row) {
-            try {
-                $this->db()->table($table)->insert($row);
-            } catch (\Exception $e) {
-                $skipped[] = isset($row['id']) ? $row['id'] : '?';
-            }
-        }
-
-        if (!empty($skipped)) {
-            // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Migration audit trail; ids only, no PII
-            error_log(sprintf(
-                '[FluentAffiliate] Ultimate Affiliate migration skipped %d row(s) inserting into %s (source ids: %s)',
-                count($skipped),
-                $table,
-                implode(',', $skipped)
-            ));
-        }
     }
 
     /**
@@ -859,9 +817,14 @@ class UltimateAffiliate extends BaseMigrator
         ;
 
         foreach ($customers as $customer) {
+            // by_affiliate_id is the mapped FA id; uap_referrals is keyed by the
+            // original source id.
+            $sourceAffiliateId = array_search((int) $customer->by_affiliate_id, $this->affiliateIdMap(), true);
+            $sourceAffiliateId = ($sourceAffiliateId === false) ? $customer->by_affiliate_id : $sourceAffiliateId;
+
             $referralIds = $db->table('uap_referrals')
                 ->where('refferal_wp_uid', $customer->user_id)
-                ->where('affiliate_id', $customer->by_affiliate_id)
+                ->where('affiliate_id', $sourceAffiliateId)
                 ->pluck('id')
             ;
             $referralIds = is_array($referralIds) ? $referralIds : $referralIds->toArray();
@@ -910,11 +873,20 @@ class UltimateAffiliate extends BaseMigrator
     {
         $db = $this->db();
 
+        // 0 is a failed payment: the money never left, so its referrals stay owed
+        // and a new payout can pay them
+        $payments = array_filter($payments, function ($payment) {
+            return (int) $payment->status !== 0;
+        });
+
+        if (!$payments) {
+            return;
+        }
+
         // FA transaction statuses: paid / processing
         $paymentStatusMap = [
             2 => 'paid',
             1 => 'processing',
-            0 => 'processing',
         ];
 
         try {
@@ -923,15 +895,19 @@ class UltimateAffiliate extends BaseMigrator
             $payoutId = $db->table('fa_payouts')->insertGetId($formattedPayout);
 
             $totalAmount = 0;
+            $hasOpenPayment = false;
 
             foreach ($payments as $payment) {
+                $transactionStatus = $paymentStatusMap[(int) $payment->status] ?? 'processing';
+                $hasOpenPayment = $hasOpenPayment || $transactionStatus !== 'paid';
+
                 $transactionId = $db->table('fa_payout_transactions')->insertGetId([
                     'payout_id'     => $payoutId,
-                    'affiliate_id'  => $payment->affiliate_id ?: null,
+                    'affiliate_id'  => $this->mapAffiliateId($payment->affiliate_id) ?: null,
                     'total_amount'  => $payment->amount ?: 0,
                     'payout_method' => $this->mapPayoutMethod($payment->payment_type),
                     'created_by'    => get_current_user_id(),
-                    'status'        => $paymentStatusMap[(int) $payment->status] ?? 'processing',
+                    'status'        => $transactionStatus,
                     'currency'      => $currency,
                     'settings'      => \maybe_serialize([]),
                     'created_at'    => $this->normalizeDate($payment->create_date),
@@ -953,54 +929,21 @@ class UltimateAffiliate extends BaseMigrator
                 }
             }
 
-            // Reconcile the header total with the sum of its transactions so the
-            // payout total never diverges from the rows it actually contains.
+            // Reconcile the header with its transactions so the payout total never
+            // diverges from the rows it contains, and a pending payment keeps it open
+            // (the same rule as Payout::recountPaymentTotal()).
             $db->table('fa_payouts')
                 ->where('id', $payoutId)
-                ->update(['total_amount' => $totalAmount])
+                ->update([
+                    'total_amount' => $totalAmount,
+                    'status'       => $hasOpenPayment ? 'processing' : 'paid',
+                ])
             ;
 
             $db->commit();
         } catch (\Exception $e) {
             $db->rollBack();
             // Skip this payout batch to avoid blocking the rest of the migration
-        }
-    }
-
-    private function hasTable($tableName)
-    {
-        $wpdb     = $GLOBALS['wpdb'];
-        $fullName = $wpdb->prefix . $tableName;
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema check; result not worth caching
-        return (bool) $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->esc_like($fullName)));
-    }
-
-    private function getAllowedResetTables()
-    {
-        return [
-            'fa_affiliates', 'fa_referrals', 'fa_customers', 'fa_visits',
-        ];
-    }
-
-    /**
-     * Reset AUTO_INCREMENT to MAX(id)+1 so future organic inserts don't collide with imported IDs.
-     */
-    private function resetAutoIncrement($tableName)
-    {
-        if (!in_array($tableName, $this->getAllowedResetTables(), true)) {
-            return;
-        }
-
-        $wpdb      = $GLOBALS['wpdb'];
-        $table     = $wpdb->prefix . $tableName;
-        $safeTable = esc_sql($table);
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name from allowlist, sanitized via esc_sql()
-        $maxId = (int) $wpdb->get_var("SELECT MAX(id) FROM `{$safeTable}`");
-
-        if ($maxId > 0) {
-            $next = $maxId + 1;
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name from allowlist, sanitized via esc_sql()
-            $wpdb->query($wpdb->prepare("ALTER TABLE `{$safeTable}` AUTO_INCREMENT = %d", $next));
         }
     }
 

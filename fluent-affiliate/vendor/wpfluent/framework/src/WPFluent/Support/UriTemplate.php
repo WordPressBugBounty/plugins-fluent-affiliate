@@ -82,6 +82,9 @@ final class UriTemplate
             return $template;
         }
 
+        // Replace each {expression} in the template with its expanded
+        // value. The pattern is '{', then one or more characters that are
+        // not '}', then '}': '/users/{id}' with ['id' => 5] -> '/users/5'.
         /** @var string|null */
         $result = \preg_replace_callback(
             '/\{([^\}]+)\}/',

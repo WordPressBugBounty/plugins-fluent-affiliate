@@ -111,7 +111,7 @@ trait HasTimestamps
      */
     public function freshTimestamp()
     {
-        return DateTime::now();
+        return DateTime::now($this->getDateTimezone());
     }
 
     /**

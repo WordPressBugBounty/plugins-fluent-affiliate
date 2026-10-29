@@ -246,7 +246,7 @@ trait ValidateDatabaseRulesTrait
      */
     protected function getUniqueIds($idColumn, $parameters)
     {
-        $idColumn = $idColumn ?: ($parameters[3] ?: 'id');
+        $idColumn = $idColumn ?: ($parameters[3] ?? 'id');
 
         return [$idColumn, $this->prepareUniqueId($parameters[2])];
     }
@@ -259,6 +259,8 @@ trait ValidateDatabaseRulesTrait
      */
     protected function prepareUniqueId($id)
     {
+        // An id in brackets names a field whose value is the id:
+        // '[user_id]' -> the value of the user_id field.
         if (preg_match('/\[(.*)\]/', $id, $matches)) {
             $id = $this->getValue($matches[1]);
         }

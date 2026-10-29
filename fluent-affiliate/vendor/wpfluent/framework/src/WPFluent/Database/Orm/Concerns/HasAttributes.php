@@ -2,9 +2,11 @@
 
 namespace FluentAffiliate\Framework\Database\Orm\Concerns;
 
+use Exception;
 use LogicException;
 use ReflectionClass;
 use ReflectionMethod;
+use DateTimeZone;
 use DateTimeInterface;
 use ReflectionNamedType;
 use InvalidArgumentException;
@@ -13,6 +15,7 @@ use FluentAffiliate\Framework\Support\Arr;
 use FluentAffiliate\Framework\Support\Str;
 use FluentAffiliate\Framework\Support\Helper;
 use FluentAffiliate\Framework\Support\DateTime;
+use FluentAffiliate\Framework\Support\DateTimeImmutable;
 use FluentAffiliate\Framework\Support\ArrayableInterface;
 use FluentAffiliate\Framework\Database\Orm\Casts\Attribute;
 use FluentAffiliate\Framework\Database\Orm\Castable;
@@ -120,6 +123,15 @@ trait HasAttributes
     protected $dateFormat;
 
     /**
+     * The timezone the model's date columns are read and stored in, for
+     * example 'UTC'. Null uses the plugin's configured timezone, else the
+     * site's.
+     *
+     * @var string|null
+     */
+    protected $dateTimezone;
+
+    /**
      * The accessors to append to the model's array form.
      *
      * @var array
@@ -213,6 +225,12 @@ trait HasAttributes
     {
         foreach ($this->getDates() as $key) {
             if (! isset($attributes[$key])) {
+                continue;
+            }
+
+            // A zero date serializes to a negative year, which the cast
+            // could not read again, so a cast one is left to the cast.
+            if ($this->isZeroDate($attributes[$key]) && $this->hasCast($key)) {
                 continue;
             }
 
@@ -784,6 +802,11 @@ trait HasAttributes
             case 'datetime':
             case 'custom_datetime':
                 return $this->asDateTime($value);
+            case 'immutable_date':
+                return new DateTimeImmutable($this->asDate($value));
+            case 'immutable_datetime':
+            case 'immutable_custom_datetime':
+                return new DateTimeImmutable($this->asDateTime($value));
             case 'timestamp':
                 return $this->asTimestamp($value);
         }
@@ -1340,7 +1363,7 @@ trait HasAttributes
         // and format a DateTime object from this timestamp. This allows flexibility
         // when defining your date fields as they might be UNIX timestamps here.
         if (is_numeric($value)) {
-            $dateTime = new DateTime();
+            $dateTime = new DateTime('now', $this->getDateTimezone());
             $dateTime->setTimestamp($value);
             return $dateTime;
         }
@@ -1348,8 +1371,15 @@ trait HasAttributes
         // If the value is in simply year, month, day format, we will instantiate the
         // DateTime instances from that format. Again, this provides for simple date
         // fields on the database.
-        if (preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})$/', $value)) {
-            $dateTime = DateTime::createFromFormat('Y-m-d', $value);
+        //
+        // The whole value must be a date and nothing else: 4 digits, then
+        // 1-2 digits, then 1-2 digits, joined by dashes. '2024-03-05' and
+        // '2024-3-5' match; '2024-03-05 10:00:00' does not. \z is the very
+        // end, so "2024-03-05\n" is not taken for a plain date.
+        if (preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})\z/', $value)) {
+            $dateTime = DateTime::createFromFormat(
+                'Y-m-d', $value, $this->getDateTimezone()
+            );
             $dateTime->setTime(0, 0, 0);
             return $dateTime;
         }
@@ -1357,7 +1387,33 @@ trait HasAttributes
         // Finally, we will just assume this date is in the format used by default on
         // the database connection and use that format to create the DateTime object
         // that is returned back out to the developers after we convert it here.
-        return DateTime::createFromFormat($this->getDateFormat(), $value);
+        try {
+            return DateTime::createFromFormat(
+                $this->getDateFormat(), $value, $this->getDateTimezone()
+            );
+        } catch (InvalidArgumentException $e) {
+            // Not the stored format: an ISO 8601 value, which an API or a
+            // browser's datetime-local input sends ('2026-01-10T10:20',
+            // '2026-01-10T04:20:30Z'). An offset in it says which moment
+            // is meant; without one the model's timezone applies, as it
+            // does everywhere else. \z, not $, so a trailing newline is
+            // still not a date. Anything PHP cannot read raises the error
+            // this method has always raised.
+            $isIso = preg_match(
+                '/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?\z/i',
+                $value
+            );
+
+            if ($isIso) {
+                try {
+                    return new DateTime($value, $this->getDateTimezone());
+                } catch (Exception $unreadable) {
+                    throw $e;
+                }
+            }
+
+            throw $e;
+        }
     }
 
     /**
@@ -1368,7 +1424,10 @@ trait HasAttributes
      */
     protected function isStandardDateFormat($value)
     {
-        return preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})$/', $value);
+        // The whole value is a date only: 4 digits, then 1-2 digits, then
+        // 1-2 digits, joined by dashes ('2024-03-05' or '2024-3-5'). \z is
+        // the very end, so a trailing newline fails.
+        return preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})\z/', $value);
     }
 
     /**
@@ -1379,9 +1438,45 @@ trait HasAttributes
      */
     public function fromDateTime($value)
     {
-        return empty($value) ? $value : $this->asDateTime($value)->format(
-            $this->getDateFormat()
-        );
+        if (empty($value)) {
+            return $value;
+        }
+
+        // WordPress's date for no date yet, and the date it reads as, are
+        // stored as WordPress stores it.
+        if ($this->isZeroDate($value)) {
+            return '0000-00-00 00:00:00';
+        }
+
+        // A column keeps a bare date and time, read back by asDateTime(),
+        // so a date is stored in the timezone that reading gives it: the
+        // model's, the plugin's configured one or the site's, or the one a
+        // model's own asDateTime() reads in. The moment given is then the
+        // moment read back. Cloning leaves the caller's own date untouched.
+        $date = clone $this->asDateTime($value);
+
+        $format = $this->getDateFormat();
+
+        $readTimezone = $this->asDateTime($date->format($format))->getTimezone();
+
+        return $date->setTimezone($readTimezone)->format($format);
+    }
+
+    /**
+     * Determine if a value is WordPress's date for no date yet: the
+     * string 0000-00-00 00:00:00 (0000-00-00 in a DATE column), or the
+     * -0001-11-30 00:00:00 date PHP reads it as.
+     *
+     * @param  mixed  $value
+     * @return bool
+     */
+    protected function isZeroDate($value)
+    {
+        if ($value instanceof DateTimeInterface) {
+            return $value->format('Y-m-d H:i:s.u') === '-0001-11-30 00:00:00.000000';
+        }
+
+        return $value === '0000-00-00 00:00:00' || $value === '0000-00-00';
     }
 
     /**
@@ -1433,6 +1528,18 @@ trait HasAttributes
     public function getDateFormat()
     {
         return $this->dateFormat ?: $this->getConnection()->getQueryGrammar()->getDateFormat();
+    }
+
+    /**
+     * Get the timezone the model's date columns are read and stored in,
+     * or null for the default (the plugin's configured one, else the
+     * site's).
+     *
+     * @return \DateTimeZone|null
+     */
+    public function getDateTimezone()
+    {
+        return $this->dateTimezone ? new DateTimeZone($this->dateTimezone) : null;
     }
 
     /**
@@ -2129,6 +2236,11 @@ trait HasAttributes
      */
     protected static function getMutatorMethods($class)
     {
+        // Join all method names with ';' and take the middle of each
+        // get...Attribute name: 'getFullNameAttribute;save;getTitleAttribute'
+        // gives ['FullName', 'Title']. (?<=^|;) makes each match start at a
+        // name's first letter; getAttribute itself has no middle, so it is
+        // not picked.
         preg_match_all('/(?<=^|;)get([^;]+?)Attribute(;|$)/', implode(';', get_class_methods($class)), $matches);
 
         return $matches[1];
@@ -2150,7 +2262,9 @@ trait HasAttributes
             if ($returnType &&
                 $returnType instanceof ReflectionNamedType &&
                 $returnType->getName() === Attribute::class) {
-                $method->setAccessible(true);
+                if (PHP_VERSION_ID < 80100) {
+                    $method->setAccessible(true);
+                }
 
                 if (is_callable($method->invoke($instance)->get)) {
                     return true;

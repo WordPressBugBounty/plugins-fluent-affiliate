@@ -56,6 +56,30 @@ class Referral extends Model
         return Utility::safeUnserialize($value);
     }
 
+    /**
+     * When an unpaid referral leaves the holding period, in site time. Null when it
+     * is payable now. Matches the cutoff in PayoutController::validatePayoutConfig().
+     *
+     * @return string|null
+     */
+    public function getHoldUntil()
+    {
+        $holdingDays = (int) Utility::getReferralSetting('holding_days', 0);
+
+        if ($holdingDays <= 0 || $this->status !== 'unpaid' || $this->payout_transaction_id || !$this->created_at) {
+            return null;
+        }
+
+        $createdAt = $this->created_at instanceof \DateTimeInterface ? $this->created_at->format('Y-m-d H:i:s') : (string) $this->created_at;
+        $holdUntil = strtotime($createdAt) + $holdingDays * DAY_IN_SECONDS;
+
+        if (!$holdUntil || $holdUntil <= current_time('timestamp')) {
+            return null;
+        }
+
+        return gmdate('Y-m-d H:i:s', $holdUntil);
+    }
+
     public function getProviderUrl()
     {
         return apply_filters('fluent_affiliate/provider_reference_' . $this->provider . '_url', '', $this);
@@ -245,6 +269,15 @@ class Referral extends Model
     public function getAdminViewUrl()
     {
         return Utility::getAdminPageUrl('referrals/'.$this->id.'/view');
+    }
+
+    /**
+     * Claimed by a payout that has not settled it yet. Editing such a row could
+     * make it payable again while the money is already on its way.
+     */
+    public function isInPayout()
+    {
+        return $this->status === 'processing' && !empty($this->payout_transaction_id);
     }
 
 }

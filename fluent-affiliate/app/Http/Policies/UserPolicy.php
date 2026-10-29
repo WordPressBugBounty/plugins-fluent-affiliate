@@ -2,28 +2,28 @@
 
 namespace FluentAffiliate\App\Http\Policies;
 
+use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\Framework\Foundation\Policy;
 use FluentAffiliate\Framework\Http\Request\Request;
 
 class UserPolicy extends Policy
 {
     /**
-     * Check user permission for any method
+     * The portal page shows a pending or inactive affiliate only a notice, so the
+     * portal routes serve active affiliates only
+     *
      * @param  \FluentAffiliate\Framework\Http\Request\Request $request
      * @return Boolean
      */
     public function verifyRequest(Request $request)
     {
-        return is_user_logged_in();
-    }
+        if (!is_user_logged_in()) {
+            return false;
+        }
 
-    /**
-     * Check user permission for any method
-     * @param  \FluentAffiliate\Framework\Http\Request\Request $request
-     * @return Boolean
-     */
-    public function create(Request $request)
-    {
-        return is_user_logged_in();
+        return Affiliate::query()
+            ->where('user_id', get_current_user_id())
+            ->where('status', 'active')
+            ->exists();
     }
 }

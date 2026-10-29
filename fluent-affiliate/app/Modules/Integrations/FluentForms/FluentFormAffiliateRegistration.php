@@ -352,7 +352,7 @@ class FluentFormAffiliateRegistration extends IntegrationManagerController
         }
 
         // Check if user already has affiliate account
-        $existingAffiliate =  Affiliate::query()->find($userId);
+        $existingAffiliate = Affiliate::query()->where('user_id', $userId)->first();
         if ($existingAffiliate) {
             // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception message for error handling
             throw new \Exception(__('User already has an affiliate account', 'fluent-affiliate'));

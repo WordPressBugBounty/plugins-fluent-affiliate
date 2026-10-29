@@ -47,7 +47,7 @@ class FormBuilder
 
         echo "<div id='fa_group_" . esc_attr($name) . "' class='fa_form-group'>";
         if ($label):
-            echo "<div class='fa_form_label'><label id='" . esc_attr($labelId) . "' for='" . esc_attr($atts['id']) . "'>" . esc_html($label) . "</label></div>";
+            echo "<div class='fa_form_label" . ($required ? ' fa_required' : '') . "'><label id='" . esc_attr($labelId) . "' for='" . esc_attr($atts['id']) . "'>" . esc_html($label) . "</label></div>";
         endif;
 
         echo "<div class='fa_form_input'>";
