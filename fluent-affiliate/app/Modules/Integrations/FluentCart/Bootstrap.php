@@ -103,11 +103,30 @@ class Bootstrap extends BaseConnector
             return;
         }
 
-        if ($order->type === 'renewal' || $this->getExistingReferral($order->id)) {
+        if ($order->type === 'renewal') {
             return;
         }
 
         $affiliate = $this->getAffiliateByNewOrder($order);
+
+        $existingReferral = $this->getExistingReferral($order->id);
+        if ($existingReferral) {
+            // FluentCart reuses an order with a pending or failed payment for the next checkout attempt
+            // (a cart retry or its payment link) and fires order_created again. A pending referral is built again.
+            if ($existingReferral->status !== 'pending') {
+                return;
+            }
+
+            // A payment link opened without the cookie keeps the referral's affiliate.
+            $previousAffiliate = $existingReferral->affiliate;
+            $affiliate = $affiliate ?: $previousAffiliate;
+
+            do_action('fluent_affiliate/referral/before_delete', $existingReferral);
+            // Deleting recounts the affiliate's earnings (Referral::booted()).
+            $existingReferral->delete();
+            do_action('fluent_affiliate/referral/deleted', $existingReferral->id, $previousAffiliate);
+        }
+
         if (!$affiliate || $affiliate->status != 'active') {
             return;
         }

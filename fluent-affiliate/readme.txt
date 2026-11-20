@@ -4,7 +4,7 @@ Tags: affiliate program, affiliate management, affiliate marketing, wp affiliate
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.7.0
+Stable tag: 1.8.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -212,6 +212,21 @@ No, FluentAffiliate works perfectly on its own; you don't need any other Fluent 
 8. Affiliate Payout
 
 == Changelog ==
+
+= 1.8.0 - Nov 20, 2026 =
+- Introduced: MCP Server for AI Agents
+- Added: One-Click FluentHub Install for the MCP Server (pro)
+- Added: Custom Commission Rates for SureCart (pro)
+- Added: Sort Affiliates by Name
+- Added: System Theme Option to Follow the Device Light or Dark Mode
+- Security: Hardened Admin Requests, Imports, FluentCRM Steps and Payment Retries
+- Fixed: Percentage Commissions Saved With More Than Two Decimals
+- Fixed: Referrals Lost When a Declined Payment Is Retried
+- Fixed: SureCart Commission Including Tax on Tax-Inclusive Prices (pro)
+- Fixed: Pending MemberPress Subscription Referrals (pro)
+- Fixed: Visit Tracking for IPv6 Visitors Behind Cloudflare
+- Fixed: Affiliate Login With Security Plugin Challenges
+- Fixed: Portal Login Redirect on Plain Permalinks
 
 = 1.7.0 - Oct 28, 2026 =
 - Introduced: Send Affiliate Payouts Through PayPal (pro)

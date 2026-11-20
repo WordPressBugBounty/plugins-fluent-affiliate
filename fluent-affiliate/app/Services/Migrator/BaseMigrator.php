@@ -136,7 +136,8 @@ abstract class BaseMigrator {
             'migrated_payout_id'        => 0,
             'migrated_customers'        => 0,
             'migrated_creatives'        => 0,
-            'current_stage'             => 'affiliate_groups',
+            // the poller never runs 'idle', so only startMigration() and its data check can begin a run
+            'current_stage'             => 'idle',
         ];
 
         $status = (array)get_option('_fla_' . $this->migratorPrefix . '_migrations_status', $defults);

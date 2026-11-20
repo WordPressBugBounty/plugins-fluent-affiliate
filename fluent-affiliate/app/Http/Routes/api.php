@@ -17,6 +17,7 @@ use FluentAffiliate\App\Http\Controllers\SettingController;
 use FluentAffiliate\App\Http\Controllers\PayoutController;
 use FluentAffiliate\App\Http\Controllers\VisitController;
 use FluentAffiliate\App\Http\Controllers\IntegrationController;
+use FluentAffiliate\App\Http\Controllers\McpSettingsController;
 
 $router->prefix('reports')->withPolicy('ReportPolicy')->group(function ($router) {
     $router->get('dashboard-stats', [DashboardController::class, 'getStats']);
@@ -111,6 +112,12 @@ $router->prefix('settings')->withPolicy('AdminPolicy')->group(function ($router)
     $router->get('/options/users', [SettingController::class, 'getUsersOptions']);
 
     $router->get('/registration-fields', [SettingController::class, 'getRegistrationFields']);
+
+    // MCP for AI agents; the switch and the FluentHub turn-on also need manage_options (checked in the controller)
+    $router->get('/mcp', [McpSettingsController::class, 'get']);
+    $router->post('/mcp', [McpSettingsController::class, 'save']);
+    $router->post('/mcp/enable-hub', [McpSettingsController::class, 'enableHub']);
+    $router->post('/mcp/install-toolkit', [McpSettingsController::class, 'installToolkit']);
 });
 
 $router->prefix('settings')->withPolicy('SuperAdminPolicy')->group(function ($router) {

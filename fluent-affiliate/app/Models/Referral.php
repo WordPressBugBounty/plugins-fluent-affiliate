@@ -58,7 +58,7 @@ class Referral extends Model
 
     /**
      * When an unpaid referral leaves the holding period, in site time. Null when it
-     * is payable now. Matches the cutoff in PayoutController::validatePayoutConfig().
+     * is payable now. Matches the cutoff in PayoutService::preview().
      *
      * @return string|null
      */

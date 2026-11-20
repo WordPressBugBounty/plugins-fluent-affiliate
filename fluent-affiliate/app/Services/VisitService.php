@@ -180,8 +180,8 @@ class VisitService
      */
     public static function resolveClientIp($serverData)
     {
-        $remoteAddr = preg_replace('/^(\d+\.\d+\.\d+\.\d+):\d+$/', '\1', sanitize_text_field(wp_unslash((string) ($serverData['REMOTE_ADDR'] ?? ''))));
-        $cloudflareIp = (string) rest_is_ip_address(sanitize_text_field(wp_unslash((string) ($serverData['HTTP_CF_CONNECTING_IP'] ?? ''))));
+        $remoteAddr = self::stripPort(sanitize_text_field(wp_unslash((string) ($serverData['REMOTE_ADDR'] ?? ''))));
+        $cloudflareIp = (string) rest_is_ip_address(self::stripPort(sanitize_text_field(wp_unslash((string) ($serverData['HTTP_CF_CONNECTING_IP'] ?? '')))));
 
         if ($cloudflareIp && self::isCfIp($remoteAddr)) {
             return $cloudflareIp;
@@ -198,6 +198,25 @@ class VisitService
         }
 
         return $remoteAddr;
+    }
+
+    /**
+     * @param string $ip
+     * @return string The address without a port, for both 1.2.3.4:80 and [2001:db8::1]:80
+     */
+    private static function stripPort($ip)
+    {
+        $ip = trim((string) $ip);
+
+        if (preg_match('/^\[(.+)\](?::\d+)?$/', $ip, $matches)) {
+            return $matches[1];
+        }
+
+        if (preg_match('/^(\d+\.\d+\.\d+\.\d+):\d+$/', $ip, $matches)) {
+            return $matches[1];
+        }
+
+        return $ip;
     }
 
     /**
@@ -229,7 +248,9 @@ class VisitService
             return false;
         }
 
-        $cloudflareIPRanges = array(
+        // Cloudflare reaches IPv6 origins over IPv6, so a v4-only list puts every visitor behind one edge.
+        // Filterable so a range change does not have to wait for a release. Source: https://www.cloudflare.com/ips/
+        $cloudflareIPRanges = (array) apply_filters('fluent_affiliate/cloudflare_ip_ranges', [
             '173.245.48.0/20',
             '103.21.244.0/22',
             '103.22.200.0/22',
@@ -245,13 +266,17 @@ class VisitService
             '104.24.0.0/14',
             '172.64.0.0/13',
             '131.0.72.0/22',
-        );
+            '2400:cb00::/32',
+            '2606:4700::/32',
+            '2803:f800::/32',
+            '2405:b500::/32',
+            '2405:8100::/32',
+            '2a06:98c0::/29',
+            '2c0f:f248::/32',
+        ]);
 
-        //Make sure that the request came via Cloudflare.
         foreach ($cloudflareIPRanges as $range) {
-            //Use the ip_in_range function from Joomla.
             if (self::ipInRange($ip, $range)) {
-                //IP is valid. Belongs to Cloudflare.
                 return true;
             }
         }
@@ -260,7 +285,8 @@ class VisitService
     }
 
     /**
-     * Check if the IP address is in the given range.
+     * CIDR or exact match for both IPv4 and IPv6, on the packed binary form,
+     * because ip2long() returns false for any IPv6 address.
      *
      * @param string $ip The IP address to check.
      * @param string $range The range to check against.
@@ -268,50 +294,44 @@ class VisitService
      */
     private static function ipInRange($ip, $range)
     {
-        if (strpos($range, '/') !== false) {
-            // $range is in IP/NETMASK format
-            list($range, $netmask) = explode('/', $range, 2);
-            if (strpos($netmask, '.') !== false) {
-                // $netmask is a 255.255.0.0 format
-                $netmask = str_replace('*', '0', $netmask);
-                $netmask_dec = ip2long($netmask);
-                return ((ip2long($ip) & $netmask_dec) == (ip2long($range) & $netmask_dec));
-            } else {
-                // $netmask is a CIDR size block
-                // fix the range argument
-                $x = explode('.', $range);
-                while (count($x) < 4) $x[] = '0';
-                list($a, $b, $c, $d) = $x;
-                $range = sprintf("%u.%u.%u.%u", empty($a) ? '0' : $a, empty($b) ? '0' : $b, empty($c) ? '0' : $c, empty($d) ? '0' : $d);
-                $range_dec = ip2long($range);
-                $ip_dec = ip2long($ip);
+        if (strpos($range, '/') === false) {
+            return $ip === $range;
+        }
 
-                # Strategy 1 - Create the netmask with 'netmask' 1s and then fill it to 32 with 0s
-                #$netmask_dec = bindec(str_pad('', $netmask, '1') . str_pad('', 32-$netmask, '0'));
+        list($subnet, $bits) = explode('/', $range, 2);
 
-                # Strategy 2 - Use math to create it
-                $wildcard_dec = pow(2, (32 - $netmask)) - 1;
-                $netmask_dec = ~$wildcard_dec;
-
-                return (($ip_dec & $netmask_dec) == ($range_dec & $netmask_dec));
-            }
-        } else {
-            // range might be 255.255.*.* or 1.2.3.0-1.2.3.255
-            if (strpos($range, '*') !== false) { // a.b.*.* format
-                // Just convert to A-B format by setting * to 0 for A and 255 for B
-                $lower = str_replace('*', '0', $range);
-                $upper = str_replace('*', '255', $range);
-                $range = "$lower-$upper";
-            }
-
-            if (strpos($range, '-') !== false) { // A-B format
-                list($lower, $upper) = explode('-', $range, 2);
-                $lower_dec = (float)sprintf("%u", ip2long($lower));
-                $upper_dec = (float)sprintf("%u", ip2long($upper));
-                $ip_dec = (float)sprintf("%u", ip2long($ip));
-                return (($ip_dec >= $lower_dec) && ($ip_dec <= $upper_dec));
-            }
+        if (!filter_var($ip, FILTER_VALIDATE_IP) || !filter_var($subnet, FILTER_VALIDATE_IP)) {
             return false;
         }
+
+        $ipBin = inet_pton($ip);
+        $subnetBin = inet_pton($subnet);
+
+        // Differing lengths means v4 against v6.
+        if (strlen($ipBin) !== strlen($subnetBin)) {
+            return false;
+        }
+
+        $bits = (int) $bits;
+
+        if ($bits < 0 || $bits > strlen($ipBin) * 8) {
+            return false;
+        }
+
+        $wholeBytes = intdiv($bits, 8);
+        $remainingBits = $bits % 8;
+
+        if ($wholeBytes && strncmp($ipBin, $subnetBin, $wholeBytes) !== 0) {
+            return false;
+        }
+
+        if ($remainingBits) {
+            $mask = chr((0xFF << (8 - $remainingBits)) & 0xFF);
+            if ((($ipBin[$wholeBytes] ^ $subnetBin[$wholeBytes]) & $mask) !== "\0") {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

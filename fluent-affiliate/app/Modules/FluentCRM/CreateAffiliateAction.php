@@ -4,6 +4,7 @@ namespace FluentAffiliate\App\Modules\FluentCRM;
 
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\User;
+use FluentAffiliate\App\Modules\Auth\AuthHelper;
 use FluentAffiliate\Framework\Support\Arr;
 use FluentCrm\App\Services\Funnel\BaseAction;
 use FluentCrm\App\Services\Funnel\FunnelHelper;
@@ -15,6 +16,13 @@ class CreateAffiliateAction extends BaseAction
         $this->actionName = 'create_affiliate_account';
         $this->priority = 20;
         parent::__construct();
+
+        // Only admins may add or change this step: it creates an affiliate with its own status and rate.
+        add_filter('fluent_crm/funnel_privileged_actions', function ($actions) {
+            $actions = (array)$actions;
+            $actions[$this->actionName] = 'manage_options';
+            return $actions;
+        });
     }
 
     public function getBlock()
@@ -111,8 +119,21 @@ class CreateAffiliateAction extends BaseAction
         ];
     }
 
+    protected function fluentCrmChecksPrivilegedSteps()
+    {
+        return class_exists('\\FluentCrm\\App\\Services\\Funnel\\PrivilegedSteps');
+    }
+
     public function handle($subscriber, $sequence, $funnelSubscriberId, $funnelMetric)
     {
+        // FluentCRM before 3.2.6 has no privileged-step check, so the step's author is checked here.
+        if (!$this->fluentCrmChecksPrivilegedSteps() && !user_can((int)$sequence->created_by, 'manage_options')) {
+            $funnelMetric->notes = __('Funnel Skipped because only an administrator can add this step', 'fluent-affiliate');
+            $funnelMetric->save();
+            FunnelHelper::changeFunnelSubSequenceStatus($funnelSubscriberId, $sequence->id, 'skipped');
+            return;
+        }
+
         $userId = $subscriber->getWpUserId();
         if (!$userId) {
             $funnelMetric->notes = __('Funnel Skipped because user could not be found', 'fluent-affiliate');
@@ -145,12 +166,26 @@ class CreateAffiliateAction extends BaseAction
             $rateType = 'flat';
         }
 
+        // Steps saved before this check keep running, so the settings are validated here.
+        $rate = Arr::get($sequence->settings, 'rate_value');
+        $isValidRate = in_array($rateType, ['percentage', 'flat'], true)
+            && is_numeric($rate) && $rate >= 0
+            && ($rateType !== 'percentage' || $rate <= 100);
+        if (!$isValidRate) {
+            $rateType = 'default';
+        }
+
+        $status = Arr::get($sequence->settings, 'affiliate_status');
+        if (!in_array($status, ['active', 'pending', 'inactive'], true)) {
+            $status = AuthHelper::getInitialAffiliateStatus();
+        }
+
         $paymentEmail = Arr::get($sequence->settings, 'payment_email', '');
 
         $affiliateData = array_filter([
-            'rate'          => $rateType !== 'default' ? Arr::get($sequence->settings, 'rate_value') : null,
+            'rate'          => $rateType !== 'default' ? $rate : null,
             'rate_type'     => $rateType,
-            'status'        => Arr::get($sequence->settings, 'affiliate_status', 'active'),
+            'status'        => $status,
             'note'          => sanitize_textarea_field(Arr::get($sequence->settings, 'note', '')),
             'payment_email' => $paymentEmail ? sanitize_email($paymentEmail) : '',
         ]);

@@ -87,6 +87,12 @@ class BaseConnector
             $data['description'] = sanitize_text_field($data['description']);
         }
 
+        // A percentage rate can leave a third decimal (20% of 151.57 is 30.314), which
+        // was saved, paid out and returned by the REST API as-is. Rounded like refunds.
+        if (isset($data['amount']) && is_numeric($data['amount'])) {
+            $data['amount'] = round((float) $data['amount'], 2);
+        }
+
         $amount = Arr::get($data, 'amount', 0);
         $type = Arr::get($data, 'type', 'sale');
 

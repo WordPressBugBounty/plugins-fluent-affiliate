@@ -195,7 +195,7 @@ class MigrationController extends Controller
 
         $status = $migrator->getCurrentStatus();
 
-        $currentStep = Arr::get($status, 'current_stage', 'affiliate_groups');
+        $currentStep = Arr::get($status, 'current_stage', 'idle');
 
         $validStages = ['affiliate_groups', 'affiliates', 'referrals', 'customers', 'payouts', 'visits', 'creatives', 'completed'];
 
@@ -250,11 +250,27 @@ class MigrationController extends Controller
         return $data ?? [];
     }
 
+    /**
+     * Only a real POST, with the confirmation in the body. A query value can come from a crafted link.
+     */
+    protected function isWipeConfirmed(Request $request)
+    {
+        if (strtoupper($request->method()) !== 'POST') {
+            return false;
+        }
+
+        // json() returns [] when the body is not JSON, so fall back to a form body
+        $confirmation = $request->json('confirmation');
+        if (!is_string($confirmation)) {
+            $confirmation = $request->post('confirmation');
+        }
+
+        return is_string($confirmation) && sanitize_text_field(wp_unslash($confirmation)) === 'WIPE ALL DATA';
+    }
+
     public function wipeCurrentData(Request $request)
     {
-        $confirmation = $request->getSafe('confirmation', 'sanitize_text_field');
-
-        if ($confirmation !== 'WIPE ALL DATA') {
+        if (!$this->isWipeConfirmed($request)) {
             return $this->sendError([
                 'message' => __('Please type "WIPE ALL DATA" to confirm this action.', 'fluent-affiliate')
             ], 422);

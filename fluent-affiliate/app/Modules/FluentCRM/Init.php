@@ -77,10 +77,6 @@ class Init
 
         $stats = [
             [
-                'title' => __('Affiliate ID', 'fluent-affiliate'),
-                'value' => '<a href="' . Utility::getAdminPageUrl('affiliates/' . $affiliate->id) . '">' . $affiliate->id . '</a>'
-            ],
-            [
                 'title' => __('Status', 'fluent-affiliate'),
                 'value' => $affiliate->status
             ],
@@ -98,17 +94,19 @@ class Init
             ],
             [
                 'title' => __('Total Referrals', 'fluent-affiliate'),
-                'value' => $affiliate->referrals
+                'value' => (int)$affiliate->referrals
             ],
             [
                 'title' => __('Total Visits', 'fluent-affiliate'),
-                'value' => $affiliate->visits
+                'value' => (int)$affiliate->visits
             ],
         ];
 
+        // FluentCRM renders this widget with v-html, so every value is escaped here.
         $html = '<ul class="fc_full_listed">';
+        $html .= '<li><span class="fc_list_sub">' . esc_html__('Affiliate ID', 'fluent-affiliate') . '</span> <span class="fc_list_value"><a href="' . esc_url(Utility::getAdminPageUrl('affiliates/' . (int)$affiliate->id)) . '">' . (int)$affiliate->id . '</a></span></li>';
         foreach ($stats as $stat) {
-            $html .= '<li><span class="fc_list_sub">' . $stat['title'] . '</span> <span class="fc_list_value">' . $stat['value'] . '</span></li>';
+            $html .= '<li><span class="fc_list_sub">' . esc_html($stat['title']) . '</span> <span class="fc_list_value">' . esc_html($stat['value']) . '</span></li>';
         }
         $html .= '</ul>';
 

@@ -279,6 +279,59 @@ class Affiliate extends Model
         return $query;
     }
 
+    public function scopeApplySorting($query, $orderBy, $orderType)
+    {
+        $orderType = strtoupper((string) $orderType) === 'ASC' ? 'ASC' : 'DESC';
+
+        if ($orderBy === 'name') {
+            return $query->orderByName($orderType);
+        }
+
+        $sortableColumns = [
+            'id',
+            'user_id',
+            'group_id',
+            'rate',
+            'total_earnings',
+            'unpaid_earnings',
+            'referrals',
+            'visits',
+            'lead_counts',
+            'payment_email',
+            'status',
+            'created_at',
+            'updated_at',
+        ];
+
+        if (! in_array($orderBy, $sortableColumns, true)) {
+            $orderBy = 'id';
+        }
+
+        return $query->orderBy($orderBy, $orderType);
+    }
+
+    /**
+     * Sort by the name the admin list shows (User::getFullNameAttribute):
+     * first + last name, else display name. Affiliates without a user go last.
+     * Subqueries instead of joins, so the unqualified columns in the other
+     * scopes (id, status, user_id) stay unambiguous.
+     */
+    public function scopeOrderByName($query, $orderType = 'ASC')
+    {
+        global $wpdb;
+
+        $orderType = strtoupper((string) $orderType) === 'DESC' ? 'DESC' : 'ASC';
+        $affTable  = $wpdb->prefix . 'fa_affiliates';
+
+        $nameSql = "COALESCE(NULLIF(TRIM(CONCAT_WS(' ', "
+            . "(SELECT fa_fn.meta_value FROM {$wpdb->usermeta} AS fa_fn WHERE fa_fn.user_id = {$affTable}.user_id AND fa_fn.meta_key = 'first_name' LIMIT 1), "
+            . "(SELECT fa_ln.meta_value FROM {$wpdb->usermeta} AS fa_ln WHERE fa_ln.user_id = {$affTable}.user_id AND fa_ln.meta_key = 'last_name' LIMIT 1)"
+            . ")), ''), "
+            . "(SELECT fa_u.display_name FROM {$wpdb->users} AS fa_u WHERE fa_u.ID = {$affTable}.user_id))";
+
+        return $query->orderByRaw("({$nameSql}) IS NULL ASC, {$nameSql} {$orderType}, {$affTable}.id {$orderType}");
+    }
+
     public function scopeByStatus($query, $status)
     {
 

@@ -14,6 +14,7 @@ use FluentAffiliate\App\Models\User;
 use FluentAffiliate\App\Models\Visit;
 use FluentAffiliate\App\Modules\Auth\AuthHelper;
 use FluentAffiliate\App\Modules\FluentCRM\CrmContactService;
+use FluentAffiliate\App\Services\AffiliateService;
 use FluentAffiliate\App\Services\PermissionManager;
 use FluentAffiliate\App\Services\Reports\ReportService;
 use FluentAffiliate\Framework\Http\Request\Request;
@@ -33,13 +34,13 @@ class AffiliateController extends Controller
         $filters = $request->get('filters', []);
         $filters = is_array($filters) ? map_deep($filters, 'sanitize_text_field') : [];
 
-        $orderBy = $request->getSafe('order_by', 'sanitize_sql_orderby', 'id');
-        $orderType = $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC');
+        $orderBy = $request->getSafe('order_by', 'sanitize_key', 'id');
+        $orderType = $request->getSafe('order_type', 'sanitize_key', 'DESC');
 
         $affiliates = Affiliate::query()->with(['user', 'group'])
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
-            ->orderBy($orderBy, $orderType)
+            ->applySorting($orderBy, $orderType)
             ->applyCustomFilters($filters)
             ->paginate(Helper::clampPerPage($request->getSafe('per_page', 'intval', 20)))
         ;
@@ -58,10 +59,13 @@ class AffiliateController extends Controller
     {
         $limit = apply_filters('fluent_affiliate/data_export_limit', 5000);
 
+        $orderBy = $request->getSafe('order_by', 'sanitize_key', 'id');
+        $orderType = $request->getSafe('order_type', 'sanitize_key', 'DESC');
+
         $affQuery = Affiliate::query()->with(['user'])
             ->searchBy($request->getSafe('search', 'sanitize_text_field'))
             ->byStatus($request->getSafe('status', 'sanitize_text_field'))
-            ->orderBy($request->getSafe('order_by', 'sanitize_sql_orderby', 'id'), $request->getSafe('order_type', 'sanitize_sql_orderby', 'DESC'));
+            ->applySorting($orderBy, $orderType);
 
         $total   = $affQuery->count();
         $limited = $total > $limit;
@@ -234,12 +238,6 @@ class AffiliateController extends Controller
 
         $user = User::findOrFail($data['user_id']);
 
-        if (Affiliate::where('user_id', $user->ID)->exists()) {
-            return $this->sendError([
-                'message' => __('This user is already an affiliate', 'fluent-affiliate')
-            ]);
-        }
-
         $filteredData = Arr::only($data, ['rate_type', 'rate', 'group_id', 'status', 'payment_email', 'bank_details']);
 
         // Handle bank_details in settings
@@ -252,7 +250,13 @@ class AffiliateController extends Controller
             return !is_null($value);
         });
 
-        $createdAffiliate = $user->syncAffiliateProfile($filteredData);
+        $createdAffiliate = AffiliateService::createForUser($user, $filteredData);
+
+        if (is_wp_error($createdAffiliate)) {
+            return $this->sendError([
+                'message' => $createdAffiliate->get_error_message()
+            ]);
+        }
 
         return [
             'message'   => __('Affiliate has been successfully created', 'fluent-affiliate'),
@@ -340,7 +344,8 @@ class AffiliateController extends Controller
             $settings['bank_details'] = sanitize_textarea_field($data['bank_details']);
             $affiliate->settings = $settings;
         } else {
-            $affiliateData['payment_email'] = sanitize_email($data['payment_email']);
+            $paymentEmail = $data['payment_email'] ?? '';
+            $affiliateData['payment_email'] = sanitize_email(is_string($paymentEmail) ? $paymentEmail : '');
         }
 
         $affiliate->fill($affiliateData);
@@ -363,34 +368,12 @@ class AffiliateController extends Controller
     {
         $affiliate = Affiliate::query()->findOrFail($id);
 
-        $status = $request->getSafe('status', 'sanitize_text_field');
+        $affiliate = AffiliateService::changeStatus($affiliate, $request->getSafe('status', 'sanitize_text_field'));
 
-        if (!in_array($status, ['pending', 'active', 'inactive'])) {
+        if (is_wp_error($affiliate)) {
             return $this->sendError([
-                'message' => __('Invalid status provided', 'fluent-affiliate'),
+                'message' => $affiliate->get_error_message(),
             ]);
-        }
-
-        if ($affiliate->status === $status) {
-            return $this->sendError([
-                'message' => __('Affiliate status is already set to this value', 'fluent-affiliate'),
-            ]);
-        }
-
-        if ($error = $this->userlessActivationError($affiliate, $status)) {
-            return $error;
-        }
-
-        $prevStatus = $affiliate->status;
-
-        $affiliate->status = $status;
-        $affiliate->save();
-        do_action('fluent_affiliate/affiliate_updated', $affiliate, 'by_admin', [
-            'status' => $status
-        ]);
-
-        if ($prevStatus !== $affiliate->status) {
-            do_action('fluent_affiliate/affiliate_status_to_' . $affiliate->status, $affiliate, $prevStatus);
         }
 
         return [
@@ -408,13 +391,11 @@ class AffiliateController extends Controller
      */
     protected function userlessActivationError(Affiliate $affiliate, $status)
     {
-        if ($status !== 'active' || $affiliate->status === 'active' || $affiliate->user) {
-            return null;
-        }
+        $error = AffiliateService::activationError($affiliate, $status);
 
-        return $this->sendError([
-            'message' => __('This affiliate has no WordPress user, so it cannot be activated. Add the affiliate again with a user.', 'fluent-affiliate'),
-        ]);
+        return $error ? $this->sendError([
+            'message' => $error->get_error_message(),
+        ]) : null;
     }
 
     /**

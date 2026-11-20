@@ -444,8 +444,7 @@ class AuthHandler
             'action' => 'fluent_affiliate_user_registration',
         ];
 
-        global $wp;
-        $currentUrl = home_url($wp->request);
+        $currentUrl = $this->currentPageUrl();
 
         ?>
         <div style="max-width: 600px; margin: 0 auto;" class="fa_auth_warp fa_register_wrap">
@@ -498,8 +497,7 @@ class AuthHandler
 
     public function renderLoginForm()
     {
-        global $wp;
-        $currentUrl = home_url($wp->request);
+        $currentUrl = $this->currentPageUrl();
 
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Form display parameter, not data submission
         if (isset($_REQUEST['fa_form']) && sanitize_text_field(wp_unslash($_REQUEST['fa_form'])) === 'register') {
@@ -518,7 +516,7 @@ class AuthHandler
                 if (AuthHelper::isFluentAuthAvailable()) {
                     echo do_shortcode('[fluent_auth_login redirect_to="' . esc_url($currentUrl) . '"]');
                 } else {
-                    $this->enqueueScripts();
+                    $this->enqueueScripts($currentUrl);
                     AuthHelper::nativeLoginForm([
                         'redirect' => $currentUrl,
                         'form_id'  => 'fluent_aff_user_login_form'
@@ -542,15 +540,35 @@ class AuthHandler
         <?php
     }
 
-    public function enqueueScripts()
+    /**
+     * The page the form is on, with its query kept so plain permalinks (?page_id=)
+     * still point at the portal. The form switch adds its own fa_form.
+     */
+    private function currentPageUrl()
+    {
+        global $wp;
+
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Builds a same-site URL, no data is saved
+        $url = home_url(add_query_arg(urlencode_deep(wp_unslash($_GET)), $wp->request));
+
+        return remove_query_arg('fa_form', $url);
+    }
+
+    public function enqueueScripts($returnUrl = '')
     {
         $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
 
         Vite::enqueueStyle('fluent-affiliate-auth-style', 'user_auth_css', [], $assetsVersion);
         Vite::enqueueScript('fluent-affiliate-auth', 'user_auth', [], $assetsVersion, true);
         wp_localize_script('fluent-affiliate-auth', 'fluentAuthPublic', [
-            'ajax_url' => admin_url('admin-ajax.php'),
-            'nonce'    => wp_create_nonce('fa_auth_nonce'),
+            'ajax_url'  => admin_url('admin-ajax.php'),
+            'nonce'     => wp_create_nonce('fa_auth_nonce'),
+            // For security plugin challenges.
+            'login_url' => wp_login_url($returnUrl),
+            'i18n'      => [
+                'generic_error'  => __('Something went wrong. Please try again later', 'fluent-affiliate'),
+                'security_check' => __('This site needs an extra security check before you can log in.', 'fluent-affiliate'),
+            ],
         ]);
     }
 }

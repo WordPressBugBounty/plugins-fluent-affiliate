@@ -51,9 +51,7 @@ class Bootstrap extends BaseConnector
             return;
         }
 
-        // This hook fires before the gateway is charged, and again when a pending
-        // submission is resubmitted, so an existing referral is left as it is.
-        // Only the paid status change in maybeMarkReferralComplete() makes it payable.
+        // Fires before the charge and again on a resubmit; only the paid status change makes it payable.
         $this->addPaymentReferral($submissionId, $submission, $form);
     }
 
@@ -68,10 +66,6 @@ class Bootstrap extends BaseConnector
 
     protected function addPaymentReferral($submissionId, $submission, $form, $type = 'payment')
     {
-        if ($this->getExistingReferral($submissionId)) {
-            return; // Referral already exists
-        }
-
         $formattedData = $this->getFormattedPaymentData($submissionId, $submission, $form);
         $customerData = Arr::get($formattedData, 'customer', []);
 
@@ -79,6 +73,23 @@ class Bootstrap extends BaseConnector
             'user_id' => Arr::get($customerData, 'user_id'),
             'email'   => Arr::get($customerData, 'email'),
         ]);
+
+        // A resubmit reuses the submission with a new payment_total, so a pending referral is rebuilt.
+        // FluentForms reuses only unpaid submissions, so a rejected referral comes from a declined payment and is rebuilt too.
+        $existingReferral = $this->getExistingReferral($submissionId);
+        if ($existingReferral) {
+            if (!in_array($existingReferral->status, ['pending', 'rejected'], true)) {
+                return;
+            }
+
+            // No cookie on the resubmit: keep the referral's affiliate.
+            $previousAffiliate = $existingReferral->affiliate;
+            $affiliate = $affiliate ?: $previousAffiliate;
+
+            do_action('fluent_affiliate/referral/before_delete', $existingReferral);
+            $existingReferral->delete(); // recounts earnings
+            do_action('fluent_affiliate/referral/deleted', $existingReferral->id, $previousAffiliate);
+        }
 
         $this->createReferralForOrder($affiliate, $customerData, $formattedData, [
             'provider_id'        => $submissionId,

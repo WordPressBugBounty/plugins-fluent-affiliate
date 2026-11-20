@@ -177,6 +177,38 @@ class AdminMenuHandler
         ]);
     }
 
+    /**
+     * Put the dark class on the document before the page paints.
+     *
+     * The theme is chosen in the browser, so the server cannot know it. Without this the
+     * first frame is always light, and a user on dark gets a white flash on every page load.
+     * It is an inline script on a src-less handle in <head>, because a script file in the
+     * footer runs too late.
+     *
+     * `fluent_theme_mode` is the key every Fluent plugin shares (see global_admin.js). It holds
+     * `light`, `dark`, `system` or `system:<resolved>`; the mode is the part before the colon.
+     * `system`, an unset key or an unknown value follows the machine's preference. The old
+     * `fla_color_mode` key wins when the shared key is unset or `system`, because other Fluent
+     * plugins write `system:<resolved>` without a user choice. `data-fa-theme` holds the
+     * selected mode, so the switcher icon is right before paint.
+     *
+     * @param string|int $version
+     * @return void
+     */
+    protected function enqueueThemeClass($version)
+    {
+        $script = <<<'JS'
+(function(){var d=document.documentElement,m='system';try{var s=String(localStorage.getItem('fluent_theme_mode')||'').split(':')[0],l=localStorage.getItem('fla_color_mode');
+if(s!=='light'&&s!=='dark'&&(l==='light'||l==='dark')){s=l;}m=s;if(m!=='light'&&m!=='dark'){m='system';}}catch(e){}
+var r=m==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):m;
+d.setAttribute('data-fa-theme',m);if(r==='dark'){d.classList.add('fluent_theme_dark');d.classList.add('dark');}})();
+JS;
+
+        wp_register_script($this->slug . '_theme_class', false, array(), $version, false);
+        wp_enqueue_script($this->slug . '_theme_class');
+        wp_add_inline_script($this->slug . '_theme_class', $script);
+    }
+
     public function enqueueAssets()
     {
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- Admin menu page parameter, no nonce needed
@@ -220,6 +252,8 @@ class AdminMenuHandler
         $assets = $app['url.assets'];
 
         $assetsVersion = Vite::isDev() ? time() : FLUENT_AFFILIATE_VERSION;
+
+        $this->enqueueThemeClass($assetsVersion);
 
         // Element Plus ships its own component styles, so they load ahead of
         // ours and our rules stay the ones that win on a tie.
@@ -410,6 +444,15 @@ class AdminMenuHandler
                 'component_type' => 'StandAloneComponent',
                 'route'          => [
                     'name' => 'affiliate_creatives'
+                ]
+            ],
+            'mcp_settings'             => [
+                'title'          => __('MCP for AI Agents', 'fluent-affiliate'),
+                'disable'        => false,
+                'svg_icon'       => '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v3M8 21h8a4 4 0 0 0 4-4v-7a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v7a4 4 0 0 0 4 4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 12v1.5M15 12v1.5M9.5 17h5M2 13v2M22 13v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                'component_type' => 'StandAloneComponent',
+                'route'          => [
+                    'name' => 'mcp_settings'
                 ]
             ],
             'features_addons'          => [

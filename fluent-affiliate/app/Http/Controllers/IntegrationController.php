@@ -107,7 +107,10 @@ class IntegrationController extends Controller
         $type = $request->getSafe('object_type', 'sanitize_text_field');
         $includeIds = $request->get('include_ids', []);
 
-        $includeIds = array_map('intval', (array)$includeIds);
+        // Some integrations use string IDs (SureCart uses UUIDs), so only cast numeric IDs.
+        $includeIds = array_map(function ($id) {
+            return is_numeric($id) ? (int)$id : sanitize_text_field($id);
+        }, (array)$includeIds);
 
         $options = apply_filters('fluent_affiliate/get_product_cat_options_' . $integration, [], [
             'object_type' => $type,

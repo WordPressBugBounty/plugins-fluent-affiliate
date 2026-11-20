@@ -19,6 +19,12 @@ add_action('plugins_loaded', function () {
     (new \FluentAffiliate\App\Modules\Integrations\CoreIntegrationsInit())->register();
 });
 
+// MCP server for AI agents. Before init: the Abilities API registry can be
+// built by any plugin on init, and the ability hooks must be in place by then.
+add_action('plugins_loaded', function () {
+    (new \FluentAffiliate\App\Modules\MCP\MCPInit())->register();
+}, 5);
+
 add_action('init', function () use ($app) {
     $app->addAction('admin_menu', [\FluentAffiliate\App\Hooks\Handlers\AdminMenuHandler::class, 'add']);
 

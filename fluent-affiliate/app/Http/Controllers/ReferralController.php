@@ -7,6 +7,7 @@ use FluentAffiliate\App\Helper\Sanitizer;
 use FluentAffiliate\App\Models\Affiliate;
 use FluentAffiliate\App\Models\Referral;
 use FluentAffiliate\App\Services\PermissionManager;
+use FluentAffiliate\App\Services\ReferralService;
 use FluentAffiliate\Framework\Http\Request\Request;
 use FluentAffiliate\Framework\Support\Arr;
 
@@ -74,32 +75,20 @@ class ReferralController extends Controller
 
         $affiliate = Affiliate::query()->findOrFail($data['affiliate_id']);
 
-        if ($affiliate->status != 'active') {
-            return $this->sendError([
-                'message' => __('You cannot create a referral for an inactive affiliate.', 'fluent-affiliate')
-            ]);
-        }
-
-        $newReferral = Referral::create([
-            'affiliate_id' => $affiliate->id,
-            'description'  => $request->getSafe('description', Sanitizer::SANITIZE_TEXT_FIELD),
-            'amount'       => round((float)Arr::get($data, 'amount', 0), 2),
-            'status'       => sanitize_text_field(Arr::get($data, 'status')),
-            'type'         => sanitize_text_field(Arr::get($data, 'type')),
-            'provider'     => $request->getSafe('provider', Sanitizer::SANITIZE_TEXT_FIELD, 'manual'),
-            'provider_id'  => $request->getSafe('provider_id', 'intval', null),
+        $newReferral = ReferralService::create($affiliate, [
+            'description' => $request->getSafe('description', Sanitizer::SANITIZE_TEXT_FIELD),
+            'amount'      => Arr::get($data, 'amount', 0),
+            'status'      => Arr::get($data, 'status'),
+            'type'        => Arr::get($data, 'type'),
+            'provider'    => $request->getSafe('provider', Sanitizer::SANITIZE_TEXT_FIELD, 'manual'),
+            'provider_id' => $request->getSafe('provider_id', 'intval', null),
         ]);
 
-        $affiliate->recountEarnings();
-
-        if ($newReferral->status === 'unpaid') {
-            do_action('fluent_affiliate/referral_marked_unpaid', $newReferral);
-        } else {
-            do_action('fluent_affiliate/referral_created', $newReferral);
+        if (is_wp_error($newReferral)) {
+            return $this->sendError([
+                'message' => $newReferral->get_error_message()
+            ]);
         }
-
-        // listeners can load the full affiliate, which a referral manager may not see
-        $newReferral->unsetRelation('affiliate');
 
         return [
             'referral' => $newReferral,
@@ -111,49 +100,27 @@ class ReferralController extends Controller
     {
         $referral = Referral::query()->findOrFail($id);
 
-        if ($referral->status == 'paid') {
+        if ($error = ReferralService::editError($referral)) {
             return $this->sendError([
-                'message' => __('You cannot update a paid referral.', 'fluent-affiliate')
-            ]);
-        }
-
-        if ($referral->isInPayout()) {
-            return $this->sendError([
-                'message' => __('This referral is in a payout that is being paid. You can change it after the payout finishes.', 'fluent-affiliate')
+                'message' => $error->get_error_message()
             ]);
         }
 
         $data = $request->all();
 
-        // a provider written type such as payment or recurring_sale identifies who
-        // owns the referral, so it can only be echoed back, never introduced or
-        // changed. Manual referrals stay switchable between the two manual types.
-        $allowedTypes = in_array($referral->type, ['sale', 'opt_in'])
-            ? ['sale', 'opt_in']
-            : [$referral->type];
-
         $this->validate($data, [
             'description' => 'nullable|string',
             'amount'      => 'required|numeric|min:0',
             'status'      => 'required|string|in:unpaid,rejected,pending',
-            'type'        => 'required|string|in:' . implode(',', $allowedTypes),
+            'type'        => 'required|string|in:' . implode(',', ReferralService::allowedTypes($referral)),
         ]);
 
-        $referral->fill([
+        $referral = ReferralService::update($referral, [
             'description' => $request->getSafe('description', Sanitizer::SANITIZE_TEXT_FIELD),
-            'amount'      => round((float)Arr::get($data, 'amount', 0), 2),
-            'status'      => sanitize_text_field(Arr::get($data, 'status')),
-            'type'        => sanitize_text_field(Arr::get($data, 'type')),
+            'amount'      => Arr::get($data, 'amount', 0),
+            'status'      => Arr::get($data, 'status'),
+            'type'        => Arr::get($data, 'type'),
         ]);
-
-        $referral->save();
-
-        $affiliate = $referral->affiliate;
-        if ($affiliate) {
-            $affiliate->recountEarnings();
-        }
-
-        $referral->unsetRelation('affiliate');
 
         return [
             'referral' => $referral,
